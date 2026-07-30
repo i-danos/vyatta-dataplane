@@ -79,9 +79,10 @@ struct vhost_event_list vhost_ev_list;
 static bool is_vhost(const struct ifnet *ifp)
 {
 	if (ifp->if_local_port) {
-		struct rte_eth_dev *eth_dev = &rte_eth_devices[ifp->if_port];
+		char dev_name_buf[RTE_ETH_NAME_MAX_LEN] = "";
 
-		if (strncmp(eth_dev->data->name, "eth_vhost", 9) == 0)
+		if (rte_eth_dev_get_name_by_port(ifp->if_port, dev_name_buf) == 0 &&
+		    strncmp(dev_name_buf, "eth_vhost", 9) == 0)
 			return true;
 	}
 
