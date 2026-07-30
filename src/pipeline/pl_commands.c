@@ -67,7 +67,7 @@ pl_recurse_cmds(zhash_t *cmds, const struct pl_node_command *c, char *toks)
 	if (tok) {
 		if (!zhash_lookup(cmds, tok)) {
 			struct pl_cmd_entry *c_entry =
-				calloc(sizeof(struct pl_cmd_entry), 1);
+				calloc(1, sizeof(struct pl_cmd_entry));
 			c_entry->next = zhash_new();
 			c_entry->version = c->version;
 			zhash_insert(cmds, tok, c_entry);

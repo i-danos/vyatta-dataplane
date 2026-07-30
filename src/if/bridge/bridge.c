@@ -271,7 +271,7 @@ static void if_vlan_in_stats_incr(struct ifnet *ifp,
 	stats->stats[lcore].rx_pkts++;
 
 	eh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
-	if (rte_is_unicast_ether_addr(&eh->d_addr))
+	if (rte_is_unicast_ether_addr(&eh->dst_addr))
 		stats->stats[lcore].rx_ucast_pkts++;
 	else
 		stats->stats[lcore].rx_nucast_pkts++;
@@ -295,7 +295,7 @@ static void if_vlan_out_stats_incr(struct bridge_softc *sc,
 	stats->stats[lcore].tx_pkts++;
 
 	eh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
-	if (rte_is_unicast_ether_addr(&eh->d_addr))
+	if (rte_is_unicast_ether_addr(&eh->dst_addr))
 		stats->stats[lcore].tx_ucast_pkts++;
 	else
 		stats->stats[lcore].tx_nucast_pkts++;
@@ -1201,7 +1201,7 @@ bridge_forward(struct bridge_softc *sc, struct ifnet *ifp,
 	 * At this point, the port either doesn't participate
 	 * in spanning tree or it is in the forwarding state.
 	 */
-	brt = bridge_rtnode_lookup(sc, &eh->d_addr, vlan);
+	brt = bridge_rtnode_lookup(sc, &eh->dst_addr, vlan);
 	if (brt == NULL)
 		return BRIDGE_PASS;	/* packet needs to be flooded */
 
@@ -1414,7 +1414,7 @@ void bridge_output(struct ifnet *ifp, struct rte_mbuf *m,
 		eh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 	}
 
-	brt = bridge_rtnode_lookup(sc, &eh->d_addr, vlan);
+	brt = bridge_rtnode_lookup(sc, &eh->dst_addr, vlan);
 	if (brt == NULL) {
 		bridge_flood(sc, NULL, m, ifp, false);
 		return;
@@ -1564,7 +1564,7 @@ void bridge_input(struct bridge_port *port, struct rte_mbuf *m)
 		capture_burst(brif, &m, 1);
 
 	/* bogon filter */
-	if (!rte_is_valid_assigned_ether_addr(&eh->s_addr))
+	if (!rte_is_valid_assigned_ether_addr(&eh->src_addr))
 		goto errorpath;
 
 	/* bridge must be up */
@@ -1586,9 +1586,9 @@ void bridge_input(struct bridge_port *port, struct rte_mbuf *m)
 	 * on whether or not the Cisco multicast address has been
 	 * registered.
 	 */
-	bool is_pvst = rte_ether_addr_equal(&eh->d_addr, &pvst_mcast_address);
+	bool is_pvst = rte_ether_addr_equal(&eh->dst_addr, &pvst_mcast_address);
 
-	if (is_link_local_ether_addr(&eh->d_addr) ||
+	if (is_link_local_ether_addr(&eh->dst_addr) ||
 	    (is_pvst &&
 	     (l2_mcfltr_node_lookup(ifp, &pvst_mcast_address) != NULL))) {
 		ifstat->ifi_imulticast++;
@@ -1603,7 +1603,7 @@ void bridge_input(struct bridge_port *port, struct rte_mbuf *m)
 	/* Learn the source address */
 	if (state == STP_IFSTATE_LEARNING ||
 	    state == STP_IFSTATE_FORWARDING)
-		bridge_rtupdate(ifp, &eh->s_addr, bridge_frame_get_vlan(m));
+		bridge_rtupdate(ifp, &eh->src_addr, bridge_frame_get_vlan(m));
 
 	if (state != STP_IFSTATE_FORWARDING)
 		goto drop;
@@ -1631,7 +1631,7 @@ void bridge_input(struct bridge_port *port, struct rte_mbuf *m)
 		/* Set eh again in case buffer in m changed. */
 		eh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 	}
-	if (unlikely(rte_ether_addr_equal(&eh->d_addr, &brif->eth_addr))) {
+	if (unlikely(rte_ether_addr_equal(&eh->dst_addr, &brif->eth_addr))) {
 		/* "to us" unicast pkts should always be consumed */
 		bridge_input_local(m, brif, brif);
 		return;
@@ -1640,14 +1640,14 @@ void bridge_input(struct bridge_port *port, struct rte_mbuf *m)
 	bool mcast = false;
 
 	/* Check for multicast and broadcast pkts *after* firewall. */
-	if (unlikely(rte_is_multicast_ether_addr(&eh->d_addr))) {
+	if (unlikely(rte_is_multicast_ether_addr(&eh->dst_addr))) {
 		struct rte_mbuf *m_local = pktmbuf_copy(m, m->pool);
 
 		if (!m_local)
 			goto errorpath;
 		mcast = true;
 		ifstat->ifi_imulticast++;
-		if (rte_is_broadcast_ether_addr(&eh->d_addr))
+		if (rte_is_broadcast_ether_addr(&eh->dst_addr))
 			pkt_mbuf_set_l2_traffic_type(m_local,
 						     L2_PKT_BROADCAST);
 		else

@@ -618,7 +618,7 @@ static void icmp_do_reflect(const struct ifnet *rcvif, struct rte_mbuf *m_in,
 
 	eh = rte_pktmbuf_mtod(m_in, struct rte_ether_hdr *);
 	vrrp_ifp = macvlan_get_vrrp_if(rcvif,
-				       (struct rte_ether_addr *)&eh->d_addr);
+				       (struct rte_ether_addr *)&eh->dst_addr);
 	if (vrrp_ifp)
 		icmp_reflect(vrrp_ifp, m_out);
 	else
@@ -690,13 +690,13 @@ icmp_do_echo_reply(struct ifnet *ifp, struct rte_mbuf *n, bool reflect)
 	struct rte_ether_hdr *neh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
 	/* Ethernet source addr is interface address */
-	rte_ether_addr_copy(&ifp->eth_addr, &neh->s_addr);
+	rte_ether_addr_copy(&ifp->eth_addr, &neh->src_addr);
 
 	if (reflect) {
 		/* Echo req source ether is echo reply dest ether */
 		struct rte_ether_hdr *oeh =
 				rte_pktmbuf_mtod(n, struct rte_ether_hdr *);
-		rte_ether_addr_copy(&oeh->s_addr, &neh->d_addr);
+		rte_ether_addr_copy(&oeh->src_addr, &neh->dst_addr);
 	}
 
 	nip = iphdr(m);

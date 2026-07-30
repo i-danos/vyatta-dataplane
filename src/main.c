@@ -367,8 +367,6 @@ static pthread_t main_pthread;
 static const struct rte_eth_conf eth_base_conf = {
 	.rxmode = {
 		.mq_mode	= ETH_MQ_RX_RSS,
-		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
-		.split_hdr_size = 0,
 	},
 	.txmode = {
 		.offloads	= DEV_TX_OFFLOAD_MULTI_SEGS |
@@ -723,7 +721,7 @@ process_burst(portid_t portid, struct rte_mbuf *pkts[], uint16_t nb)
 
 	/* Prefetch first packets */
 	for (i = 0; i < PREFETCH_OFFSET && i < nb; i++) {
-		rte_prefetch0(pkts[i]->cacheline1);
+		rte_prefetch0(RTE_PTR_ADD(pkts[i], RTE_CACHE_LINE_SIZE));
 		rte_prefetch0(rte_pktmbuf_mtod(pkts[i], void *));
 	}
 
@@ -737,7 +735,7 @@ process_burst(portid_t portid, struct rte_mbuf *pkts[], uint16_t nb)
 
 	/* Process already prefetched packets */
 	for (i = 0; i + PREFETCH_OFFSET < nb; i++) {
-		rte_prefetch0(pkts[i + PREFETCH_OFFSET]->cacheline1);
+		rte_prefetch0(RTE_PTR_ADD(pkts[i + PREFETCH_OFFSET], RTE_CACHE_LINE_SIZE));
 		rte_prefetch0(rte_pktmbuf_mtod(pkts[i + PREFETCH_OFFSET],
 					       void *));
 		pktmbuf_mdata_clear_all(pkts[i]);
@@ -977,10 +975,6 @@ poll_transmit_queues(struct lcore_conf *conf)
 		/* read queueid and other txq fields after reading portid */
 		cmm_smp_rmb();
 
-		/* prefetch the Tx queue state */
-		struct rte_eth_dev *dev = &rte_eth_devices[portid];
-		rte_prefetch0(dev->data->tx_queues[txq->queueid]);
-
 		unsigned int space = TX_PKT_BURST - txq->pending;
 
 		struct sched_info *qinfo = qos_handle(ifp);
@@ -1137,16 +1131,12 @@ int reconfigure_queues(portid_t portid,
 {
 	struct port_conf *port_conf = &port_config[portid];
 	struct port_alloc *port_alloc = &port_allocations[portid];
-	struct rte_eth_dev *eth_dev = &rte_eth_devices[portid];
 	struct rte_eth_conf dev_conf;
 	int ret;
 	uint16_t q;
 
-	/* The device may have changed its configuration since
-	 * we last configured. This is typical for bonding which
-	 * must use a subset of the capabilities of the members.
-	 */
-	memcpy(&dev_conf, &eth_dev->data->dev_conf, sizeof(dev_conf));
+	memset(&dev_conf, 0, sizeof(dev_conf));
+	if (rte_eth_dev_conf_get(portid, &dev_conf) < 0) {}
 
 	ret = rte_eth_dev_configure(portid,
 				    nb_rx_queues, nb_tx_queues, &dev_conf);
@@ -1227,7 +1217,6 @@ eth_port_configure(portid_t portid, struct rte_eth_conf *dev_conf)
 
 uint64_t get_link_modes(struct ifnet *ifp)
 {
-	struct rte_eth_dev *eth_dev;
 	uint32_t link_speeds;
 	uint64_t link_modes = 0;
 
@@ -1238,8 +1227,10 @@ uint64_t get_link_modes(struct ifnet *ifp)
 		goto out;
 	}
 
-	eth_dev = &rte_eth_devices[ifp->if_port];
-	link_speeds = eth_dev->data->dev_conf.link_speeds;
+	struct rte_eth_conf dev_conf;
+	memset(&dev_conf, 0, sizeof(dev_conf));
+	if (rte_eth_dev_conf_get(ifp->if_port, &dev_conf) < 0) {}
+	link_speeds = dev_conf.link_speeds;
 
 	if (link_speeds == ETH_LINK_SPEED_AUTONEG)
 		link_modes |= ADVERTISED_Autoneg;
@@ -2012,14 +2003,11 @@ void disable_transmit_thread(portid_t portid)
 bool port_uses_queue_state(uint16_t portid)
 {
 	struct port_alloc *port_alloc = &port_allocations[portid];
-	struct rte_eth_dev *dev = &rte_eth_devices[portid];
+	char dev_name_buf[RTE_ETH_NAME_MAX_LEN] = "";
 
-	/*
-	 * Only multiqueue-capable vhost interfaces generate
-	 * RTE_ETH_EVENT_QUEUE_STATE events.
-	 */
+	rte_eth_dev_get_name_by_port(portid, dev_name_buf);
 
-	return !strncmp(dev->data->name, "eth_vhost", 9) &&
+	return !strncmp(dev_name_buf, "eth_vhost", 9) &&
 		port_alloc->tx_queues > 1 && port_alloc->rx_queues > 1;
 }
 
@@ -2615,7 +2603,8 @@ static int port_conf_final(portid_t portid, struct rte_eth_conf *dev_conf)
 
 	memcpy(dev_conf, &eth_base_conf, sizeof(*dev_conf));
 
-	rte_eth_dev_info_get(portid, &dev_info);
+	if (rte_eth_dev_info_get(portid, &dev_info) < 0)
+		memset(&dev_info, 0, sizeof(dev_info));
 
 	dev_conf->intr_conf.lsc = (port_alloc->dev_flags &
 				   RTE_ETH_DEV_INTR_LSC) ? 1 : 0;
@@ -2655,7 +2644,6 @@ static int port_conf_final(portid_t portid, struct rte_eth_conf *dev_conf)
 
 static int port_conf_init(portid_t portid)
 {
-	struct rte_eth_dev *dev = &rte_eth_devices[portid];
 	struct port_conf *port_conf = &port_config[portid];
 	struct port_alloc *port_alloc = &port_allocations[portid];
 	int socketid = rte_eth_dev_socket_id(portid);
@@ -2674,7 +2662,8 @@ static int port_conf_init(portid_t portid)
 
 	port_alloc->socketid = socketid;
 
-	rte_eth_dev_info_get(portid, &dev_info);
+	if (rte_eth_dev_info_get(portid, &dev_info) < 0)
+		memset(&dev_info, 0, sizeof(dev_info));
 	driver_name = dev_info.driver_name;
 
 	/* If this is the hyperv driver, it could be accelerated by
@@ -2868,7 +2857,7 @@ static int port_conf_init(portid_t portid)
 		port_alloc->rx_mq_mode = parm->rx_mq_mode;
 
 	/* Potentially restrict device capabilities */
-	port_alloc->dev_flags = dev->data->dev_flags;
+	port_alloc->dev_flags = dev_info.dev_flags ? *dev_info.dev_flags : 0;
 	port_alloc->dev_flags |= parm->dev_flags;
 	port_alloc->dev_flags &= ~parm->neg_dev_flags;
 
@@ -2965,7 +2954,8 @@ int insert_port(portid_t port_id)
 	return 0;
 
 failed:
-	rte_eth_dev_info_get(port_id, &dev_info);
+	if (rte_eth_dev_info_get(port_id, &dev_info) < 0)
+		memset(&dev_info, 0, sizeof(dev_info));
 	rte_dev_remove(dev_info.device);
 	return -1;
 }
@@ -3282,10 +3272,10 @@ static void set_signal_handlers(void)
 			rte_panic("set_signal_handler: sig %d\n", signum);
 	}
 
-	static uint8_t altstack[SIGSTKSZ];
+	static uint8_t altstack[16384];
 	stack_t ss = {
 		.ss_sp = altstack,
-		.ss_size = SIGSTKSZ,
+		.ss_size = sizeof(altstack),
 	};
 
 	if (sigaltstack(&ss, NULL) == -1)
@@ -3581,11 +3571,7 @@ main(int argc, char **argv)
 	if (ret < 0)
 		return -1;
 
-	ret = rte_eal_hpet_init(1);
-	if (ret < 0)
-		RTE_LOG(INFO, DATAPLANE,
-			"HPET is not available, using TSC as default timer. Timestamps in captured packets may drift over time\n"
-			);
+	/* HPET init deprecated/removed in modern DPDK */
 
 	/* set the global CZMQ socket options, will apply to all sockets */
 	zsys_set_ipv6(1);

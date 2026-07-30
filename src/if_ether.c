@@ -212,7 +212,7 @@ void lladdr_update(struct ifnet *ifp, struct llentry *la, uint8_t state,
 			/* fill in destination in held packet and send it */
 			eh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
-			rte_ether_addr_copy(enaddr, &eh->d_addr);
+			rte_ether_addr_copy(enaddr, &eh->dst_addr);
 			/*
 			 * Note: even though this may be a forwarded
 			 * packet, NULL is passed in for the input

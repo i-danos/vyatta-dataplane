@@ -11,7 +11,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <linux/if.h>
-#include <dpdk/rte_jhash.h>
+#include <rte_jhash.h>
 
 #include "compiler.h"
 #include "if_var.h"

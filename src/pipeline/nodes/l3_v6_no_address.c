@@ -39,7 +39,7 @@ ipv6_in_no_address_process(struct pl_packet *pkt __unused,
 	 * that this is a LAG member and will never have a valid IPv6
 	 * address.
 	 */
-	if (unlikely(rte_ether_addr_equal(&eth->d_addr, &micro_bfd_dst)))
+	if (unlikely(rte_ether_addr_equal(&eth->dst_addr, &micro_bfd_dst)))
 		return IPV6_IN_SPECIAL_PACKET;
 
 	/*

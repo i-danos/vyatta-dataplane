@@ -115,8 +115,8 @@ static int arp_reply(struct ifnet *ifp, struct rte_mbuf *m,
 	memcpy(ah->arp_tpa, ah->arp_spa, sizeof(struct in_addr));
 	memcpy(ah->arp_spa, &taddr, sizeof(struct in_addr));
 
-	memcpy(&eh->d_addr, ah->arp_tha, RTE_ETHER_ADDR_LEN);
-	memcpy(&eh->s_addr, ah->arp_sha, RTE_ETHER_ADDR_LEN);
+	memcpy(&eh->dst_addr, ah->arp_tha, RTE_ETHER_ADDR_LEN);
+	memcpy(&eh->src_addr, ah->arp_sha, RTE_ETHER_ADDR_LEN);
 
 	char b1[INET_ADDRSTRLEN], b2[ETH_ADDR_STR_LEN];
 	ARP_DEBUG("send reply for %s (%s) on %s\n",
@@ -227,7 +227,7 @@ arp_in_nothot_process(struct pl_packet *pkt, void *context __unused)
 
 	eh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 	vrrp_ifp = macvlan_get_vrrp_if(ifp,
-				       (struct rte_ether_addr *)&eh->d_addr);
+				       (struct rte_ether_addr *)&eh->dst_addr);
 	if (vrrp_ifp)
 		pkt->in_ifp = ifp = vrrp_ifp;
 
@@ -241,7 +241,7 @@ arp_in_nothot_process(struct pl_packet *pkt, void *context __unused)
 	memcpy(&isaddr, ah->arp_spa, sizeof(isaddr));
 	memcpy(&itaddr, ah->arp_tpa, sizeof(itaddr));
 
-	if (unlikely(rte_is_multicast_ether_addr(&eh->d_addr))) {
+	if (unlikely(rte_is_multicast_ether_addr(&eh->dst_addr))) {
 		struct sockaddr sock_storage;
 		struct sockaddr_in *ip_storage =
 			(struct sockaddr_in *) &sock_storage;

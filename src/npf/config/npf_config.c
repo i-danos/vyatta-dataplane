@@ -62,7 +62,7 @@ static void npf_config_free_rcu(struct rcu_head *head)
 
 static int npf_config_default_alloc(struct npf_config **npf_confp)
 {
-	struct npf_config *npf_conf = calloc(sizeof(*npf_conf), 1);
+	struct npf_config *npf_conf = calloc(1, sizeof(*npf_conf));
 
 	if (npf_conf == NULL)
 		return -ENOMEM;

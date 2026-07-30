@@ -202,8 +202,8 @@ arprequest(struct ifnet *ifp, struct sockaddr *sa)
 		dp_pktmbuf_notify_and_free(m);
 		return NULL;
 	}
-	memset(&eh->d_addr, 0xff, RTE_ETHER_ADDR_LEN);
-	rte_ether_addr_copy(&ifp->eth_addr, &eh->s_addr);
+	memset(&eh->dst_addr, 0xff, RTE_ETHER_ADDR_LEN);
+	rte_ether_addr_copy(&ifp->eth_addr, &eh->src_addr);
 	eh->ether_type = htons(RTE_ETHER_TYPE_ARP);
 
 	ah = (struct ether_arp *) (eh+1);

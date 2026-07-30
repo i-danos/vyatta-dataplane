@@ -54,24 +54,24 @@ ipv4_encap_eth_from_nh4(struct rte_mbuf *mbuf, const struct next_hop *nh,
 				rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
 	struct ifnet *out_ifp = dp_nh_get_ifp(nh); /* Needed for VRRP */
 
-	rte_ether_addr_copy(&out_ifp->eth_addr, &eth_hdr->s_addr);
+	rte_ether_addr_copy(&out_ifp->eth_addr, &eth_hdr->src_addr);
 
 	/* If already resolved, use the link level encap */
 	struct llentry *lle = nh_get_lle(nh);
 	if (likely(lle != NULL)) {
-		if (llentry_copy_mac(lle, &eth_hdr->d_addr))
+		if (llentry_copy_mac(lle, &eth_hdr->dst_addr))
 			return true;
 	}
 
 	/* Derive a multicast MAC address from the IP address */
 	if (unlikely(nh->flags & RTF_MULTICAST)) {
 		mcast_dst_eth_addr_t eth_daddr = mcast_dst_eth_addr(addr);
-		rte_ether_addr_copy(&eth_daddr.as_addr, &eth_hdr->d_addr);
+		rte_ether_addr_copy(&eth_daddr.as_addr, &eth_hdr->dst_addr);
 		return true;
 	}
 
 	/* Not yet resolved, so try to do so */
-	if (likely(arpresolve_fast(out_ifp, mbuf, addr, &eth_hdr->d_addr) == 0))
+	if (likely(arpresolve_fast(out_ifp, mbuf, addr, &eth_hdr->dst_addr) == 0))
 		return true;
 
 	return false;

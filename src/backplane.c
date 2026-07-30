@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <rte_log.h>
+#include <rte_dev.h>
 #include <rte_ethdev.h>
 #include <rte_bus_pci.h>
 #include <rte_pci.h>
@@ -41,25 +42,21 @@ static int backplane_port_get_index_and_name(uint16_t dpdk_port, int *index,
 					     char **name_p)
 {
 	struct rte_eth_dev_info dev;
+	struct rte_pci_addr loc;
 	unsigned int i;
 
-	rte_eth_dev_info_get(dpdk_port, &dev);
-	const struct rte_bus *bus = rte_bus_find_by_device(dev.device);
-	struct rte_pci_device *pci = NULL;
+	int ret = rte_eth_dev_info_get(dpdk_port, &dev);
+	if (ret < 0)
+		return ret;
 
-	if (bus && streq(bus->name, "pci"))
-		pci = RTE_DEV_TO_PCI(dev.device);
-	if (!pci)
+	const char *dev_name = dev.device ? rte_dev_name(dev.device) : NULL;
+	if (!dev_name || rte_pci_addr_parse(dev_name, &loc) != 0)
 		return -ENOENT;
-
-	const struct rte_pci_addr *loc;
-
-	loc = &pci->addr;
 	for (i = 0; i < num_bp_intfs; i++) {
-		if (loc->domain == bp_intfs[i].pci_addr.domain &&
-		    loc->bus == bp_intfs[i].pci_addr.bus &&
-		    loc->devid == bp_intfs[i].pci_addr.devid &&
-		    loc->function == bp_intfs[i].pci_addr.function) {
+		if (loc.domain == bp_intfs[i].pci_addr.domain &&
+		    loc.bus == bp_intfs[i].pci_addr.bus &&
+		    loc.devid == bp_intfs[i].pci_addr.devid &&
+		    loc.function == bp_intfs[i].pci_addr.function) {
 			*index = i;
 			if (bp_intfs[i].name && name_p)
 				*name_p = bp_intfs[i].name;

@@ -1013,18 +1013,18 @@ vxlan_snoop(enum vgpe_nxt_proto nxtproto, struct ifnet *ifp,
 	/* Don't learn my own address,
 	 *  other side might be setup the same way
 	 */
-	if (unlikely(rte_ether_addr_equal(&eh->s_addr, &ifp->eth_addr)))
+	if (unlikely(rte_ether_addr_equal(&eh->src_addr, &ifp->eth_addr)))
 		return;
 
 	struct bridge_port *brport = rcu_dereference(ifp->if_brport);
 
 	if (unlikely(brport &&
 		     rte_ether_addr_equal(
-			     &eh->s_addr,
+			     &eh->src_addr,
 			     &bridge_port_get_bridge(brport)->eth_addr)))
 		return;
 
-	vxlan_rtupdate(ifp, &ipaddr, &eh->s_addr);
+	vxlan_rtupdate(ifp, &ipaddr, &eh->src_addr);
 }
 
 static void
@@ -1230,8 +1230,8 @@ vxlan_output(struct ifnet *ifp, struct rte_mbuf *m, uint16_t proto)
 	     eh->ether_type != htons(ETH_P_IPV6))) {
 		nxtproto = (vxl_type == VXLAN_L2) ?
 			VGPE_NXT_NONE : VGPE_NXT_ETHER;
-		is_multicast = rte_is_multicast_ether_addr(&eh->d_addr);
-		vxlrt = vxlan_rtnode_lookup(sc, &eh->d_addr);
+		is_multicast = rte_is_multicast_ether_addr(&eh->dst_addr);
+		vxlrt = vxlan_rtnode_lookup(sc, &eh->dst_addr);
 		if (vxlrt) {
 			if (vxlrt->vxlrt_flags & IFBAF_ADDR_V4) {
 				dip.type = AF_INET;

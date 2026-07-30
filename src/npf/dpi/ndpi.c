@@ -32,7 +32,7 @@
 #include "npf_shim.h"
 #include "npf/dpi/app_cmds.h"
 #include "npf/dpi/dpi_internal.h"
-#include "ndpi_main.h"
+#include <ndpi/ndpi_main.h>
 #include "vplane_log.h"
 #include "util.h"
 #include "vplane_debug.h"
@@ -134,8 +134,7 @@ dpi_ndpi_process(struct ndpi_detection_module_struct *detect,
 		rte_pktmbuf_mtod(mbuf, const unsigned char *) + offset;
 
 	ndpi_protocol proto = ndpi_detection_process_packet(detect, flow->key,
-			data, data_len, (uint64_t) get_time_uptime(),
-			flow->src_id, flow->dest_id);
+			data, data_len, (uint64_t) get_time_uptime());
 
 	/* Offload the given ndpi_flow if the protocol is known,
 	 * or if the sum of its forward and backward packet counts

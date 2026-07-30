@@ -595,7 +595,7 @@ recurse_cmds(zhash_t *cmds, const struct session_command *f, char *toks)
 
 	if (tok) {
 		if (!zhash_lookup(cmds, tok)) {
-			struct cmd_entry *c_entry = calloc(sizeof(*c_entry), 1);
+			struct cmd_entry *c_entry = calloc(1, sizeof(*c_entry));
 
 			c_entry->_next = zhash_new();
 			zhash_insert(cmds, tok, c_entry);

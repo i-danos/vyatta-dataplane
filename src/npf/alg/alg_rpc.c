@@ -12,8 +12,7 @@
 
 #include <errno.h>
 #include <netinet/in.h>
-#include <rpc/pmap_prot.h>
-#include <rpc/rpc_msg.h>
+#include <gssrpc/rpc.h>
 #include <rte_log.h>
 #include <stdbool.h>
 #include <stdint.h>

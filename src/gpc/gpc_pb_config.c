@@ -90,7 +90,7 @@ gpc_pb_ip_prefix_parse(IPPrefix *msg, struct ip_prefix *cfg_pfx)
 }
 
 static int
-gpc_pb_icmp_parse(struct _RuleMatch__ICMPTypeAndCode *msg,
+gpc_pb_icmp_parse(RuleMatch__ICMPTypeAndCode *msg,
 		  struct icmp_type_code *icmp)
 {
 	/*
@@ -204,7 +204,7 @@ gpc_pb_policer_delete(struct gpc_pb_policer *policer)
 }
 
 static int
-gpc_pb_policer_parse(struct _PolicerParams *msg, struct gpc_pb_action *action)
+gpc_pb_policer_parse(PolicerParams *msg, struct gpc_pb_action *action)
 {
 	struct gpc_pb_policer *policer = &action->action_value.policer;
 

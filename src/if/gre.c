@@ -1683,7 +1683,7 @@ int ip_gre_tunnel_in(struct rte_mbuf **m0, struct iphdr *ip)
 			int err;
 
 			err = bridge_newneigh_tunnel(brport,
-						     &ethhdr(m)->s_addr,
+						     &ethhdr(m)->src_addr,
 						     ip->saddr, 0);
 			if (unlikely(err != 0)) {
 				dp_pktmbuf_notify_and_free(m);
