@@ -1687,7 +1687,7 @@ bool if_stats(struct ifnet *ifp, struct if_data *stats)
 		for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; tc++) {
 			bytes_dropped += subport_stats.n_bytes_tc_dropped[tc];
 			total_drops += subport_stats.n_pkts_tc_dropped[tc];
-			red_drops += subport_stats.n_pkts_red_dropped[tc];
+			red_drops += subport_stats.n_pkts_cman_dropped[tc];
 		}
 		stats->ifi_obytes -= bytes_dropped;
 		stats->ifi_opackets -= total_drops;
@@ -1725,7 +1725,7 @@ void if_mpls_stats(const struct ifnet *ifp, struct if_mpls_data *stats)
  * Constants for averages over 1, 5, and 15 minutes
  * when sampling at 5 second intervals.
  */
-static const uint32_t cexp[3] = {
+static const uint32_t cexp[3] __attribute__((unused)) = {
 	(uint32_t) (0.9200444146293232 * FSCALE),	/* exp(-1/12) */
 	(uint32_t) (0.9834714538216174 * FSCALE),	/* exp(-1/60) */
 	(uint32_t) (0.9944598480048967 * FSCALE),	/* exp(-1/180) */

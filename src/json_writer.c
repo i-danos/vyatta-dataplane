@@ -135,7 +135,8 @@ static void jsonw_begin(json_writer_t *self, int c)
 
 static void jsonw_end(json_writer_t *self, int c)
 {
-	assert(self->depth > 0);
+	if (self->depth == 0)
+		return;
 
 	--self->depth;
 	if (self->sep != '\0')
@@ -166,6 +167,7 @@ static void jsonw_printf(json_writer_t *self, const char *fmt, ...)
 	jsonw_eor(self);
 	vfprintf(self->out, fmt, ap);
 	va_end(ap);
+	self->sep = ',';
 }
 
 /* Collections */
@@ -194,6 +196,7 @@ void jsonw_string(json_writer_t *self, const char *value)
 {
 	jsonw_eor(self);
 	jsonw_puts(self, value);
+	self->sep = ',';
 }
 
 void jsonw_bool(json_writer_t *self, bool val)
