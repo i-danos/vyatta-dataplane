@@ -1046,7 +1046,7 @@ qos_hw_process_queue_stats(struct sched_info *qinfo, uint32_t subport,
 			(queue_stats->n_bytes_dropped -
 			 queue_stats->n_bytes_dropped_lc);
 		if (wred_id != FAL_QOS_NULL_OBJECT_ID)
-			subport_stats->n_pkts_red_dropped[tc] +=
+			subport_stats->n_pkts_cman_dropped[tc] +=
 				(queue_stats->n_pkts_red_dropped -
 				 queue_stats->n_pkts_red_dropped_lc);
 	}

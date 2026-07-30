@@ -122,8 +122,8 @@ int qos_dpdk_subport_read_stats(struct sched_info *qinfo,
 			queue_stats->n_bytes_tc[i] += stats.n_bytes_tc[i];
 			queue_stats->n_pkts_tc_dropped[i] +=
 				stats.n_pkts_tc_dropped[i];
-			queue_stats->n_pkts_red_dropped[i] +=
-				stats.n_pkts_red_dropped[i];
+			queue_stats->n_pkts_cman_dropped[i] +=
+				stats.n_pkts_cman_dropped[i];
 		}
 	}
 	rte_spinlock_unlock(&qinfo->stats_lock);
@@ -161,8 +161,8 @@ int qos_dpdk_subport_clear_stats(struct sched_info *qinfo, uint32_t subport)
 			queue_stats->n_pkts_tc_dropped[tc];
 		clear_stats->n_bytes_tc_dropped[tc] =
 			queue_stats->n_bytes_tc_dropped[tc];
-		clear_stats->n_pkts_red_dropped[tc] =
-			queue_stats->n_pkts_red_dropped[tc];
+		clear_stats->n_pkts_cman_dropped[tc] =
+			queue_stats->n_pkts_cman_dropped[tc];
 	}
 	rte_spinlock_unlock(&qinfo->stats_lock);
 	return 0;
@@ -178,7 +178,7 @@ int qos_dpdk_queue_read_stats(struct sched_info *qinfo,
 	struct rte_sched_port *port = qinfo->dev_info.dpdk.port;
 	uint32_t qid = qos_sched_calc_qindex(qinfo, subport, pipe, tc, q);
 	uint16_t qlen_16;
-	int ret, i;
+	int ret;
 
 	/*
 	 * The DPDK always measures queue length in the number of packets.
@@ -190,10 +190,7 @@ int qos_dpdk_queue_read_stats(struct sched_info *qinfo,
 		queue_stats->n_pkts += stats.n_pkts;
 		queue_stats->n_bytes += stats.n_bytes;
 		queue_stats->n_pkts_dropped += stats.n_pkts_dropped;
-		queue_stats->n_pkts_red_dropped += stats.n_pkts_red_dropped;
-		for (i = 0; i < RTE_NUM_DSCP_MAPS; i++)
-			queue_stats->n_pkts_red_dscp_dropped[i] +=
-				stats.n_pkts_red_dscp_dropped[i];
+		queue_stats->n_pkts_red_dropped += stats.n_pkts_cman_dropped;
 		*qlen = qlen_16;
 	}
 	rte_spinlock_unlock(&qinfo->stats_lock);
@@ -399,28 +396,22 @@ static int qos_dpdk_setup_params(struct ifnet *ifp, struct sched_info *qinfo,
 	if (!pipe_profiles)
 		return -1;
 
-	dpdk_port_params->pipe_profiles = pipe_profiles;
+	dpdk_port_params->subport_profiles = (struct rte_sched_subport_profile_params *)pipe_profiles;
 
 	if (socketid < 0) /* SOCKET_ID_ANY */
 		socketid = 0;
 
 	dpdk_port_params->socket = socketid;
-	dpdk_port_params->n_pipe_profiles = qos_params->n_pipe_profiles;
+	dpdk_port_params->n_subport_profiles = qos_params->n_pipe_profiles;
 	dpdk_port_params->rate = qos_params->rate;
 	dpdk_port_params->mtu = qos_params->mtu;
 	dpdk_port_params->frame_overhead = qos_params->frame_overhead;
 	dpdk_port_params->n_subports_per_port = qos_params->n_subports_per_port;
 	dpdk_port_params->n_pipes_per_subport = qos_params->n_pipes_per_subport;
-	for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++)
-		dpdk_port_params->qsize[i] = qos_queue_size_get(
-				qos_params->qsize[i],
-				qos_params->qsize_type,
-				qos_params->rate);
 	for (i = 0; i < qos_params->n_pipe_profiles; i++) {
 		struct rte_sched_pipe_params *to = &pipe_profiles[i];
 		struct qos_pipe_params *from =
 				qos_params->pipe_profiles + i;
-		struct qos_red_pipe_params *wred_params = NULL;
 
 		to->tc_period = from->shaper.tc_period;
 		to->tb_size = from->shaper.tb_size;
@@ -432,52 +423,13 @@ static int qos_dpdk_setup_params(struct ifnet *ifp, struct sched_info *qinfo,
 			to->wrr_weights[j] = from->wrr_weights[j];
 		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++)
 			to->tc_rate[j] = from->shaper.tc_rate[j];
-		SLIST_FOREACH(wred_params, &from->red_head, list) {
-			struct rte_red_pipe_params *qred_info;
-			int err, k;
-
-			qred_info = rte_red_alloc_q_params(to,
-							wred_params->qindex);
-			if (!qred_info)
-				return -ENOMEM;
-			for (k = 0; k < wred_params->red_q_params.num_maps;
-			     k++) {
-				struct qos_red_q_params *params;
-				params = &wred_params->red_q_params;
-
-				uint32_t wred_min_th = 0;
-				uint32_t wred_max_th = 0;
-				qos_wred_threshold_get(&params->qparams[k],
-						from->shaper.tb_rate,
-						&wred_min_th, &wred_max_th);
-
-				err = rte_red_init_q_params(
-						&qred_info->red_q_params,
-						wred_max_th,
-						wred_min_th,
-						params->qparams[k].maxp_inv,
-						params->dscp_set[k],
-						params->grp_names[k]);
-				if (err < 0)
-					return -ENOMEM;
-				qred_info->red_q_params.qparams[k].wq_log2 =
-					params->qparams[k].wq_log2;
-			}
-		}
 	}
 	return 0;
 }
 
 static void qos_dpdk_free_params(struct rte_sched_port_params *dpdk_port_params)
 {
-	unsigned int i;
-
-	for (i = 0; i < dpdk_port_params->n_pipe_profiles; i++) {
-		struct rte_sched_pipe_params *pp =
-					dpdk_port_params->pipe_profiles + i;
-		rte_red_free_q_params(pp, i);
-	}
-	free(dpdk_port_params->pipe_profiles);
+	free(dpdk_port_params->subport_profiles);
 }
 
 /* Allocate and initialize a handle to QoS scheduler.
@@ -552,7 +504,7 @@ int qos_dpdk_start(struct ifnet *ifp, struct sched_info *qinfo,
 		struct subport_info *sinfo = &qinfo->subport[subport];
 		struct qos_shaper_conf *qos_params = &sinfo->params;
 		struct rte_sched_subport_params dpdk_params;
-		uint16_t qsize[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE];
+		uint16_t qsize[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE] __attribute__((unused));
 		struct rte_red_params
 			dpdk_red_params[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE]
 				       [RTE_COLORS];
