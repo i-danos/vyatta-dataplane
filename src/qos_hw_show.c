@@ -326,7 +326,8 @@ void qos_hw_show_to_tc_map_list(uint8_t map_type __unused,
 				struct fal_qos_map_list_t *map_list,
 				json_writer_t *wr)
 {
-	uint64_t cp_bitmap[RTE_SCHED_QUEUES_PER_PIPE *
+	uint64_t cp_bitmap[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE *
+			   RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS *
 			   (QOS_MAX_DROP_PRECEDENCE + 1)] = { 0 };
 	uint32_t tc;
 	uint32_t dp;

@@ -108,29 +108,11 @@ static int crypto_rte_sym_pool_grow(struct rte_mempool *pool)
 	return 0;
 }
 
-static struct rte_cryptodev_sym_session *
+static __attribute__((unused)) struct rte_cryptodev_sym_session *
 crypto_rte_get_session(struct rte_mempool *pool)
 {
-	int rc;
-	struct rte_cryptodev_sym_session *session;
-
-	session = rte_cryptodev_sym_session_create(pool);
-
-	if (session)
-		return session;
-
-	if (rte_errno != ENOENT) {
-		RTE_LOG(ERR, DATAPLANE, "Failed to create crypto session: %s\n",
-			rte_strerror(rte_errno));
-		return NULL;
-	}
-
-	/* pool is empty, try to grow the pool */
-	rc = crypto_rte_sym_pool_grow(pool);
-	if (rc < 0)
-		return NULL;
-
-	return rte_cryptodev_sym_session_create(pool);
+	(void)pool;
+	return NULL;
 }
 
 int crypto_rte_setup(void)
@@ -141,7 +123,7 @@ int crypto_rte_setup(void)
 	/*
 	 * allocate generic session context pool
 	 */
-	crypto_session_pool = rte_cryptodev_sym_session_pool_create_empty(
+	crypto_session_pool = rte_cryptodev_sym_session_pool_create(
 		"crypto_session_pool", CRYPTO_MAX_SESSIONS, 0, 0, 0, socket);
 	if (!crypto_session_pool) {
 		RTE_LOG(ERR, DATAPLANE,
@@ -151,7 +133,7 @@ int crypto_rte_setup(void)
 
 	err = rte_mempool_set_ops_byname(crypto_session_pool, "ring_mp_mc",
 					 NULL);
-	if (err < 0) {
+	if (err < 0 && err != -EEXIST) {
 		RTE_LOG(ERR, DATAPLANE,
 			"Failed to setup mempool handler for crypto session pool: %s\n",
 			rte_strerror(-err));
@@ -574,7 +556,6 @@ int crypto_rte_create_pmd(int cpu_socket, uint8_t dev_id,
 	struct rte_cryptodev_qp_conf qp_conf = {
 		.nb_descriptors = 2048,
 		.mp_session = crypto_session_pool,
-		.mp_session_private = crypto_priv_sess_pools[dev_type]
 	};
 
 	for (int i = MIN_CRYPTO_XFRM; i < MAX_CRYPTO_XFRM; i++) {
@@ -723,29 +704,20 @@ int crypto_rte_setup_session(struct crypto_session *session,
 			     enum cryptodev_type dev_type, uint8_t rte_cdev_id)
 {
 	struct rte_crypto_sym_xform cipher_xform, auth_xform, *xform_chain;
-	int err = 0;
+	(void)dev_type;
 
 	crypto_rte_setup_xform_chain(session, &cipher_xform, &auth_xform,
 				     &xform_chain);
 
-	session->rte_session = crypto_rte_get_session(crypto_session_pool);
+	session->rte_session = rte_cryptodev_sym_session_create(
+		rte_cdev_id, xform_chain, crypto_session_pool);
 	if (!session->rte_session) {
 		RTE_LOG(ERR, DATAPLANE, "Could not create cryptodev session: %s\n",
 			rte_strerror(rte_errno));
 		return -rte_errno;
 	}
 
-	err = rte_cryptodev_sym_session_init(
-		rte_cdev_id, session->rte_session, xform_chain,
-		crypto_priv_sess_pools[dev_type]);
-	if (err) {
-		RTE_LOG(ERR, DATAPLANE,
-			"Could not initialize cryptodev session\n");
-		rte_cryptodev_sym_session_free(session->rte_session);
-		session->rte_session = NULL;
-	}
-
-	return err;
+	return 0;
 }
 
 int crypto_rte_destroy_session(struct crypto_session *session,
@@ -756,15 +728,7 @@ int crypto_rte_destroy_session(struct crypto_session *session,
 	if (!session->rte_session)
 		return 0;
 
-	rte_cryptodev_sym_session_clear(rte_cdev_id, session->rte_session);
-	err = rte_cryptodev_sym_session_free(session->rte_session);
-	if (err) {
-		RTE_LOG(ERR, DATAPLANE,
-			"Failed to free cryptodev session : %s\n",
-			strerror(-err));
-		return err;
-	}
-
+	err = rte_cryptodev_sym_session_free(rte_cdev_id, session->rte_session);
 	session->rte_session = NULL;
 	return err;
 }

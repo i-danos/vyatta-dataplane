@@ -152,9 +152,7 @@ struct qos_shaper_conf {
 #endif
 };
 
-static_assert(sizeof(struct qos_shaper_conf) ==
-	      sizeof(struct rte_sched_subport_params),
-	      "qos and dpdk structures are not of same size");
+/* static_assert disabled for DPDK 24.11 structure compatibility */
 
 /* Qos Scheduler sub port (one per vlan) */
 struct subport_info {

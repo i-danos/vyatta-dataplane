@@ -680,7 +680,7 @@ void crypto_prefetch_mbuf_data(struct crypto_pkt_ctx *ctx_arr[], uint16_t count,
 	i = cur + CRYPTO_PREFETCH_LOOKAHEAD;
 	j = cur + 1;
 	for (; j < count && j < i; j++)
-		rte_prefetch0(ctx_arr[j]->mbuf->cacheline1);
+		rte_prefetch0(RTE_PTR_ADD(ctx_arr[j]->mbuf, RTE_CACHE_LINE_SIZE));
 }
 
 /*

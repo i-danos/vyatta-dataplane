@@ -1293,8 +1293,8 @@ static void qos_show_subport(json_writer_t *wr,
 		bytes = queue_stats->n_bytes_tc[i] - clear_stats->n_bytes_tc[i];
 		dropped = queue_stats->n_pkts_tc_dropped[i] -
 			clear_stats->n_pkts_tc_dropped[i];
-		random_drop = queue_stats->n_pkts_red_dropped[i] -
-			clear_stats->n_pkts_red_dropped[i];
+		random_drop = queue_stats->n_pkts_cman_dropped[i] -
+			clear_stats->n_pkts_cman_dropped[i];
 
 		jsonw_start_object(wr);
 		jsonw_uint_field(wr, "packets", packets);
@@ -5049,8 +5049,8 @@ bool qos_sched_subport_get_stats(struct sched_info *qinfo, uint16_t vlan_id,
 			queue_stats->n_bytes_tc_dropped[tc];
 		stats->n_pkts_tc_dropped[tc] =
 			queue_stats->n_pkts_tc_dropped[tc];
-		stats->n_pkts_red_dropped[tc] =
-			queue_stats->n_pkts_red_dropped[tc];
+		stats->n_pkts_cman_dropped[tc] =
+			queue_stats->n_pkts_cman_dropped[tc];
 	}
 	rte_spinlock_unlock(&qinfo->stats_lock);
 	return true;
