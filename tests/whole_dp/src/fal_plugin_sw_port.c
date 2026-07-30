@@ -143,6 +143,26 @@ eth_queue_release(void *q __rte_unused)
 }
 
 
+struct eth_dev_ops {
+	int (*dev_start)(struct rte_eth_dev *);
+	int (*dev_stop)(struct rte_eth_dev *);
+	int (*dev_set_link_up)(struct rte_eth_dev *);
+	int (*dev_set_link_down)(struct rte_eth_dev *);
+	int (*dev_configure)(struct rte_eth_dev *);
+	int (*dev_infos_get)(struct rte_eth_dev *, struct rte_eth_dev_info *);
+	int (*rx_queue_setup)(struct rte_eth_dev *, uint16_t, uint16_t, unsigned int, const struct rte_eth_rxconf *, struct rte_mempool *);
+	int (*tx_queue_setup)(struct rte_eth_dev *, uint16_t, uint16_t, unsigned int, const struct rte_eth_txconf *);
+	void (*rx_queue_release)(void *);
+	void (*tx_queue_release)(void *);
+	int (*link_update)(struct rte_eth_dev *, int);
+	int (*stats_get)(struct rte_eth_dev *, struct rte_eth_stats *);
+	int (*stats_reset)(struct rte_eth_dev *);
+	void (*mac_addr_remove)(struct rte_eth_dev *, uint32_t);
+	int (*mac_addr_add)(struct rte_eth_dev *, struct rte_ether_addr *, uint32_t, uint32_t);
+	int (*get_module_info)(struct rte_eth_dev *, struct rte_eth_dev_module_info *);
+	int (*get_module_eeprom)(struct rte_eth_dev *, struct rte_dev_eeprom_info *);
+};
+
 static const struct eth_dev_ops eth_ops = {
 	.dev_start = eth_dev_start,
 	.dev_stop = eth_dev_stop,
@@ -186,7 +206,7 @@ void fal_plugin_sw_ports_create(void)
 	args.hw_port = fal_sw_port_0.port;
 
 	args.plugin_private = &fal_sw_port_0;
-	args.plugin_dev_ops = &eth_ops;
+	args.plugin_dev_ops = (void *)(uintptr_t)&eth_ops;
 	args.plugin_tx = fal_plugin_tx_backplane_cb;
 	args.plugin_tx_framer = plugin_framer_tx;
 

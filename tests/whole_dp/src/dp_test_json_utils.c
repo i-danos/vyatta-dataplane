@@ -67,7 +67,7 @@ parse_json(const char *response_str, char *err_str, uint err_str_sz)
 					     response_str, response_str_len);
 
 	jerr = json_tokener_get_error(tokener);
-	if (jerr != json_tokener_success)
+	if (jerr != json_tokener_success && jerr != json_tokener_continue)
 		snprintf(err_str, err_str_sz,
 			 "Json tokener error: %s parsing '%s'",
 			 json_tokener_error_desc(jerr),

@@ -573,7 +573,7 @@ dp_test_parse_dp_prefix(const char *prefix_string,
 struct dp_test_route *
 dp_test_parse_route(const char *route_string)
 {
-	struct dp_test_route *route = calloc(sizeof(*route), 1);
+	struct dp_test_route *route = calloc(1, sizeof(*route));
 	/* Populate VRF id, if present in string. Otherwise assign default */
 	const char *end = dp_test_parse_dp_vrf(route_string, &route->vrf_id);
 
