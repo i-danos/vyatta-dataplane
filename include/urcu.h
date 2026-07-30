@@ -24,6 +24,18 @@
 #include <urcu/rculfhash.h>
 #include <urcu/rculist.h>
 
+#ifdef rcu_cmpxchg_pointer
+#undef rcu_cmpxchg_pointer
+#define rcu_cmpxchg_pointer(p, old, _new) \
+	__extension__ \
+	({ \
+		__typeof__(*p) _________pold = (old); \
+		__typeof__(*p) _________pnew = (_new); \
+		uatomic_cmpxchg_mo(p, _________pold, _________pnew, \
+				   CMM_SEQ_CST, CMM_RELAXED); \
+	})
+#endif
+
 #include "rcu.h"
 
 #endif /* VYATTA_DATAPLANE_URCU_H */
