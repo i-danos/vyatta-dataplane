@@ -354,8 +354,8 @@ ip6_refragment_packet(struct ifnet *o_ifp, struct rte_mbuf *m,
 	 */
 	eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
-	rte_ether_addr_copy(&eth_hdr->d_addr, &eth_copy.d_addr);
-	rte_ether_addr_copy(&eth_hdr->s_addr, &eth_copy.s_addr);
+	rte_ether_addr_copy(&eth_hdr->dst_addr, &eth_copy.dst_addr);
+	rte_ether_addr_copy(&eth_hdr->src_addr, &eth_copy.src_addr);
 	eth_copy.ether_type = eth_hdr->ether_type;
 
 	/*
@@ -414,8 +414,8 @@ ip6_refragment_packet(struct ifnet *o_ifp, struct rte_mbuf *m,
 			 */
 			eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
-			rte_ether_addr_copy(&eth_copy.d_addr, &eth_hdr->d_addr);
-			rte_ether_addr_copy(&eth_copy.s_addr, &eth_hdr->s_addr);
+			rte_ether_addr_copy(&eth_copy.dst_addr, &eth_hdr->dst_addr);
+			rte_ether_addr_copy(&eth_copy.src_addr, &eth_hdr->src_addr);
 			eth_hdr->ether_type = eth_copy.ether_type;
 
 			(*output_fn)(o_ifp, m, ctx);

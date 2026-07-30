@@ -394,7 +394,7 @@ ecmp_create(struct nlattr *mpath, uint32_t *count, bool *missing_ifp)
 	if (!size)
 		return NULL;
 
-	n = next = calloc(sizeof(struct next_hop), size);
+	n = next = calloc(size, sizeof(struct next_hop));
 	if (!next)
 		return NULL;
 
@@ -546,7 +546,7 @@ ecmp6_create(struct nlattr *mpath, uint32_t *count, bool *missing_ifp)
 	if (size == 0)
 		return NULL;
 
-	n = next = calloc(sizeof(struct next_hop), size);
+	n = next = calloc(size, sizeof(struct next_hop));
 	if (!next)
 		return NULL;
 

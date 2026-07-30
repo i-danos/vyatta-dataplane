@@ -71,7 +71,7 @@ npf_match_mac(const struct rte_mbuf *nbuf, uint32_t opts, const char *filt)
 				rte_pktmbuf_mtod(nbuf, struct rte_ether_hdr *);
 	const struct rte_ether_addr *addr;
 
-	addr = (opts & NC_MATCH_SRC) ? &eh->s_addr : &eh->d_addr;
+	addr = (opts & NC_MATCH_SRC) ? &eh->src_addr : &eh->dst_addr;
 
 	return rte_ether_addr_equal(addr,
 				    (struct rte_ether_addr *)filt) ? 0 : -1;

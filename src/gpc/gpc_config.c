@@ -21,7 +21,7 @@
 static struct cds_list_head *gpc_feature_list;
 
 static int
-gpc_feature_parse(struct _GPCConfig *msg __unused)
+gpc_feature_parse(GPCConfig *msg __unused)
 {
 	return 0;
 }

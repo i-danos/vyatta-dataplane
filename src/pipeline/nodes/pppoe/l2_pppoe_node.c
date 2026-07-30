@@ -54,9 +54,9 @@ pppoe_in_process(struct pl_packet *pkt, void *context __unused)
 			m, (sizeof(struct pppoe_packet) -
 				sizeof(struct rte_ether_hdr)));
 		m->l2_len = sizeof(struct rte_ether_hdr);
-		memcpy(&eh->d_addr, &pppoe_hdr->eth_hdr.d_addr,
+		memcpy(&eh->dst_addr, &pppoe_hdr->eth_hdr.dst_addr,
 				sizeof(struct rte_ether_addr));
-		memcpy(&eh->s_addr, &pppoe_hdr->eth_hdr.s_addr,
+		memcpy(&eh->src_addr, &pppoe_hdr->eth_hdr.src_addr,
 				sizeof(struct rte_ether_addr));
 
 		switch (inner_proto) {

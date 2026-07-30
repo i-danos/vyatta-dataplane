@@ -176,7 +176,7 @@ static int cl_zmq_init(enum cgn_log_type ltype,
 	if (sender != NULL)
 		return -EEXIST;
 
-	sender = calloc(sizeof(*sender), 1);
+	sender = calloc(1, sizeof(*sender));
 
 	if (sender == NULL)
 		return -ENOMEM;

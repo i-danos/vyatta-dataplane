@@ -57,7 +57,7 @@ static inline char *ethhdr_prepend(struct rte_mbuf *m, uint16_t ethtype)
 	m->l2_len = RTE_ETHER_HDR_LEN;
 	eh = ethhdr(m);
 	/* Clear multicast bit */
-	eh->d_addr.addr_bytes[0] &= ~RTE_ETHER_GROUP_ADDR;
+	eh->dst_addr.addr_bytes[0] &= ~RTE_ETHER_GROUP_ADDR;
 	eh->ether_type = htons(ethtype);
 	return data_start;
 }

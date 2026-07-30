@@ -390,7 +390,7 @@ macvlan_input(struct ifnet *ifp, struct rte_mbuf *m)
 	struct mvl_tbl *mvlt
 		= rcu_dereference(ifp->if_macvlantbl);
 
-	ifp = mvlt ? macvlan_lookup(mvlt, &eth->d_addr, true) : NULL;
+	ifp = mvlt ? macvlan_lookup(mvlt, &eth->dst_addr, true) : NULL;
 
 	if (!ifp)
 		dp_pktmbuf_notify_and_free(m);

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: LGPL-2.1-only
  */
 #include <string.h>
+#include <stdlib.h>
 
 #include <sys/queue.h>		/* TAILQ macros */
 #include <rte_debug.h>

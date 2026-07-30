@@ -157,7 +157,7 @@ npf_ncgen_addjmp(nc_ctx_t *ctx, uint32_t **nc_ptr)
 nc_ctx_t *
 npf_ncgen_create(void)
 {
-	return calloc(sizeof(nc_ctx_t), 1);
+	return calloc(1, sizeof(nc_ctx_t));
 }
 
 /*

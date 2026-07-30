@@ -105,13 +105,13 @@ npf_log_mac_fields(const struct rte_mbuf *mbuf,
 	memcpy(bp, mprefix, pl + 1);
 	bp += pl;
 
-	ether_ntoa_r(&eth->s_addr, bp);
+	ether_ntoa_r(&eth->src_addr, bp);
 	bp += strlen(bp);
 
 	*bp++ = '-';
 	*bp++ = '>';
 
-	ether_ntoa_r(&eth->d_addr, bp);
+	ether_ntoa_r(&eth->dst_addr, bp);
 	bp += strlen(bp);
 
 	*bp++ = ' ';

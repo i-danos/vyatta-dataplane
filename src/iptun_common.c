@@ -246,8 +246,8 @@ iptun_eth_hdr_fixup(struct rte_mbuf *m, uint16_t next_prot,
 		return -1;
 
 	new_eth->ether_type = htons(next_prot);
-	new_eth->s_addr = orig_eth->s_addr;
-	new_eth->d_addr = orig_eth->d_addr;
+	new_eth->src_addr = orig_eth->src_addr;
+	new_eth->dst_addr = orig_eth->dst_addr;
 	return 0;
 }
 

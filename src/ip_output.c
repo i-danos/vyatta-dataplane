@@ -89,7 +89,7 @@ void ip_output(struct rte_mbuf *m, bool srced_forus)
 		goto drop;
 
 	if (srced_forus) {
-		rte_ether_addr_copy(&ifp->eth_addr, &eh->d_addr);
+		rte_ether_addr_copy(&ifp->eth_addr, &eh->dst_addr);
 		/*
 		 * We want the kernel to believe this came from the interface
 		 * that we failed the mtu check on.

@@ -400,7 +400,7 @@ enum {
 RTE_ACL_RULE_DEF(acl4_rules, RTE_DIM(ipv4_defs));
 RTE_ACL_RULE_DEF(acl6_rules, RTE_DIM(ipv6_defs));
 
-static uint32_t
+static uint32_t __attribute__((unused))
 acl_rule_hash(const void *data, uint32_t data_len, uint32_t init_val)
 {
 	const struct rte_acl_rule *rule = (const struct rte_acl_rule *) data;
@@ -408,7 +408,7 @@ acl_rule_hash(const void *data, uint32_t data_len, uint32_t init_val)
 	return rte_hash_crc(&rule->data.userdata, data_len, init_val);
 }
 
-static int
+static int __attribute__((unused))
 acl_rule_hash_cmp(const void *key1, const void *key2, size_t key_len __rte_unused)
 {
 	const struct rte_acl_rule *rule1 = (const struct rte_acl_rule *) key1;
@@ -605,7 +605,7 @@ static int npf_rte_acl_create_trie(int af, int max_rules,
 				   struct npf_match_ctx_trie **m_trie)
 {
 	int err;
-	size_t key_len = sizeof(struct rte_acl_rule_data);
+	size_t key_len __rte_unused = sizeof(struct rte_acl_rule_data);
 
 	/* rte_acl in hashtable mode can only generate
 	 * rules with at least 8 entries.
@@ -616,18 +616,6 @@ static int npf_rte_acl_create_trie(int af, int max_rules,
 	struct rte_acl_param acl_param = {
 		.socket_id = SOCKET_ID_ANY,
 		.max_rule_num = max_rules,
-		.flags = ACL_F_USE_HASHTABLE,
-		.hash_func = acl_rule_hash,
-		.hash_key_len = key_len,
-		.hash_cmp_func = acl_rule_hash_cmp,
-	};
-	struct rte_acl_rcu_config rcu_conf = {
-		.mode = RTE_ACL_QSBR_MODE_DQ,
-		.dq_size = max_rules,
-		.dq_trigger_reclaim_limit = 0,
-		.dq_max_reclaim_size = ~0,
-		.thread_id = dp_lcore_id(),
-		.v = dp_rcu_qsbr_get(),
 	};
 	struct npf_match_ctx_trie *tmp_trie;
 	const char *pfx1, *pfx2;
@@ -636,11 +624,9 @@ static int npf_rte_acl_create_trie(int af, int max_rules,
 
 	if (af == AF_INET) {
 		acl_param.rule_size = RTE_ACL_RULE_SZ(RTE_DIM(ipv4_defs));
-		acl_param.rule_pool = npr_acl4_pool;
 		pfx1 = "ipv4";
 	} else if (af == AF_INET6) {
 		acl_param.rule_size = RTE_ACL_RULE_SZ(RTE_DIM(ipv6_defs));
-		acl_param.rule_pool = npr_acl6_pool;
 		pfx1 = "ipv6";
 	} else
 		return -EINVAL;
@@ -681,13 +667,6 @@ static int npf_rte_acl_create_trie(int af, int max_rules,
 			"Could not allocate ACL context for %s: %s\n", acl_name,
 			rte_strerror(rte_errno));
 		err = -rte_errno;
-		goto error;
-	}
-
-	err = rte_acl_rcu_qsbr_add(tmp_trie->acl_ctx, &rcu_conf);
-	if (err) {
-		RTE_LOG(ERR, DATAPLANE, "Failed to enable RCU for ACL ctx %s\n",
-			tmp_trie->trie_name);
 		goto error;
 	}
 

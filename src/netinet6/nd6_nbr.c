@@ -431,7 +431,7 @@ nd6_entry_amend(struct ifnet *ifp, struct llentry *la, uint8_t state,
 						      struct rte_ether_hdr *);
 
 				la->la_held[i] = NULL;
-				rte_ether_addr_copy(enaddr, &eh->d_addr);
+				rte_ether_addr_copy(enaddr, &eh->dst_addr);
 				if_output(ifp, m, NULL, ntohs(eh->ether_type));
 			}
 			la->la_numheld = 0;
@@ -645,9 +645,9 @@ nd6_na_output(struct ifnet *ifp, const struct rte_ether_addr *lladdr,
 	pktlen = sizeof(*eh) + sizeof(*ip6) + paylen;
 
 	eh = (struct rte_ether_hdr *)rte_pktmbuf_append(m, pktlen);
-	rte_ether_addr_copy(&ifp->eth_addr, &eh->s_addr);
+	rte_ether_addr_copy(&ifp->eth_addr, &eh->src_addr);
 	if (lladdr)
-		rte_ether_addr_copy(lladdr, &eh->d_addr);
+		rte_ether_addr_copy(lladdr, &eh->dst_addr);
 	eh->ether_type = htons(RTE_ETHER_TYPE_IPV6);
 
 	ip6 = (struct ip6_hdr *)(eh + 1);
@@ -704,7 +704,7 @@ nd6_na_output(struct ifnet *ifp, const struct rte_ether_addr *lladdr,
 	/*
 	 * Send NA. If we don't have dest MAC then resolve it
 	 */
-	if (lladdr || !nd6_resolve(NULL, ifp, m, daddr6, &eh->d_addr))
+	if (lladdr || !nd6_resolve(NULL, ifp, m, daddr6, &eh->dst_addr))
 		if_output(ifp, m, NULL, ntohs(eh->ether_type));
 }
 
@@ -1080,7 +1080,7 @@ nd6_ns_build(struct ifnet *ifp, const struct in6_addr *res_src,
 	pktlen = sizeof(*eh) + sizeof(*ip6) + paylen;
 
 	eh = (struct rte_ether_hdr *)rte_pktmbuf_append(m, pktlen);
-	rte_ether_addr_copy(&ifp->eth_addr, &eh->s_addr);
+	rte_ether_addr_copy(&ifp->eth_addr, &eh->src_addr);
 	eh->ether_type = htons(RTE_ETHER_TYPE_IPV6);
 
 	ip6 = (struct ip6_hdr *)(eh + 1);
@@ -1097,7 +1097,7 @@ nd6_ns_build(struct ifnet *ifp, const struct in6_addr *res_src,
 	 */
 	if (dst_mac) {
 		ip6->ip6_dst = *taddr6;
-		rte_ether_addr_copy(dst_mac, &eh->d_addr);
+		rte_ether_addr_copy(dst_mac, &eh->dst_addr);
 	} else {
 		ip6->ip6_dst.s6_addr16[0] = IPV6_ADDR_INT16_MLL;
 		ip6->ip6_dst.s6_addr16[1] = 0;
@@ -1106,9 +1106,9 @@ nd6_ns_build(struct ifnet *ifp, const struct in6_addr *res_src,
 		ip6->ip6_dst.s6_addr32[3] = taddr6->s6_addr32[3];
 		ip6->ip6_dst.s6_addr[12] = 0xff;
 
-		eh->d_addr.addr_bytes[0] = 0x33;
-		eh->d_addr.addr_bytes[1] = 0x33;
-		memcpy(&eh->d_addr.addr_bytes[2], &ip6->ip6_dst.s6_addr[12], 4);
+		eh->dst_addr.addr_bytes[0] = 0x33;
+		eh->dst_addr.addr_bytes[1] = 0x33;
+		memcpy(&eh->dst_addr.addr_bytes[2], &ip6->ip6_dst.s6_addr[12], 4);
 	}
 
 	/*

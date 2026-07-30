@@ -1445,7 +1445,7 @@ next_hop_list_copy_next_hops(struct next_hop_list *nhl, int *size)
 	int i;
 
 	*size = nhl->nsiblings;
-	n = next = calloc(sizeof(struct next_hop), *size);
+	n = next = calloc(*size, sizeof(struct next_hop));
 	if (!next)
 		return NULL;
 

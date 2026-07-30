@@ -171,7 +171,7 @@ pb_add_command(const struct pb_msg_handler *cmd, int mode)
 	}
 
 	struct pb_msg_handler *c_entry =
-		calloc(sizeof(*c_entry), 1);
+		calloc(1, sizeof(*c_entry));
 	if (c_entry == 0) {
 		RTE_LOG(ERR, DATAPLANE,
 			"memory allocation failure: protobuf cmd\n");

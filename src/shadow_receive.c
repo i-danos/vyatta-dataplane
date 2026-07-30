@@ -441,9 +441,9 @@ bool local_packet_filter(const struct ifnet *ifp, struct rte_mbuf *m)
 	struct slow_protocol_frame *slow_hdr;
 
 	/* Filter out unwanted multicasts */
-	if (rte_is_multicast_ether_addr(&eh->d_addr) &&
+	if (rte_is_multicast_ether_addr(&eh->dst_addr) &&
 	    ifp->if_mac_filtr_active &&
-	    l2_mcfltr_node_lookup(ifp, &eh->d_addr) == NULL)
+	    l2_mcfltr_node_lookup(ifp, &eh->dst_addr) == NULL)
 		return false;
 
 	if (ifp->if_type == IFT_BRIDGE) {
