@@ -188,9 +188,9 @@ dp_test_pktmbuf_mac_set(struct rte_mbuf *m, const char *mac_str, bool src_mac)
 	assert(mac_str);
 	eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 	if (src_mac)
-		mac_field = &eth->s_addr;
+		mac_field = &eth->src_addr;
 	else
-		mac_field = &eth->d_addr;
+		mac_field = &eth->dst_addr;
 
 	if (ether_aton_r(mac_str, mac_field) == NULL)
 		assert(false);
@@ -218,9 +218,9 @@ dp_test_pktmbuf_mac_get(struct rte_mbuf *m, char *mac, bool src_mac)
 	assert(mac);
 	eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 	if (src_mac)
-		mac_field = &eth->s_addr;
+		mac_field = &eth->src_addr;
 	else
-		mac_field = &eth->d_addr;
+		mac_field = &eth->dst_addr;
 
 	if (ether_ntoa_r(mac_field, mac) == NULL)
 		assert(false);
@@ -273,11 +273,11 @@ dp_test_pktmbuf_eth(struct rte_mbuf *m,
 
 	if (!d_addr)
 		d_addr = "00:00:00:00:00:00";
-	if (ether_aton_r(d_addr, &eth->d_addr) == NULL)
+	if (ether_aton_r(d_addr, &eth->dst_addr) == NULL)
 		assert(false);
 	if (!s_addr)
 		s_addr = "00:00:00:00:00:00";
-	if (ether_aton_r(s_addr, &eth->s_addr) == NULL)
+	if (ether_aton_r(s_addr, &eth->src_addr) == NULL)
 		assert(false);
 
 	return eth;
@@ -3160,8 +3160,8 @@ dp_test_create_l2_pak_from_data(const char *d_addr, const char *s_addr,
 
 	/* Optionally overwrite ethernet header */
 	if (d_addr && s_addr) {
-		ether_aton_r(d_addr, &eth->d_addr);
-		ether_aton_r(s_addr, &eth->s_addr);
+		ether_aton_r(d_addr, &eth->dst_addr);
+		ether_aton_r(s_addr, &eth->src_addr);
 
 		if (ether_type != 0)
 			eth->ether_type = htons(ether_type);

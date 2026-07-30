@@ -276,7 +276,7 @@ dp_test_netlink_interface_l2_all(const char *ifname, int mtu,
 					       "       \"ether\": \"%s\","
 					       "       \"mtu\": %d,"
 					       "       \"vrf_id\": %d,"
-					       "       \"flags\": %d,"
+					       "       \"flags\": %d"
 					       "    }"
 					       "  ]"
 					       "}",

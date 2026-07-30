@@ -947,7 +947,7 @@ static struct rte_mbuf *dp_test_create_na_pak(const char *saddr,
 	dp_test_pktmbuf_eth_init(na_pak, dmac, smac, RTE_ETHER_TYPE_IPV6);
 
 	rte_ether_addr_copy(&rte_pktmbuf_mtod(na_pak,
-			struct rte_ether_hdr *)->s_addr,
+			struct rte_ether_hdr *)->src_addr,
 			(struct rte_ether_addr *)(nd_opt + 1));
 
 	icmp6->icmp6_cksum = 0;
@@ -998,7 +998,7 @@ static struct rte_mbuf *dp_test_create_ns_pak(const char *saddr,
 	dp_test_pktmbuf_eth_init(ns_pak, dmac, smac, RTE_ETHER_TYPE_IPV6);
 
 	rte_ether_addr_copy(&rte_pktmbuf_mtod(ns_pak,
-			struct rte_ether_hdr *)->s_addr,
+			struct rte_ether_hdr *)->src_addr,
 			(struct rte_ether_addr *)(nd_opt + 1));
 
 	icmp6->icmp6_cksum = 0;
