@@ -179,6 +179,30 @@ static bool is_multifunction(const struct rte_pci_addr *loc)
 	return (pci_cfg[0x0e] & 0x80) != 0;
 }
 
+static void get_pci_id_str(const struct rte_pci_addr *loc, char *buf, size_t size)
+{
+	char filename[PATH_MAX];
+	uint8_t pci_cfg[64];
+	snprintf(filename, PATH_MAX,
+		 SYSFS_PCI_DEVICES "/" PCI_PRI_FMT "/config",
+		 loc->domain, loc->bus, loc->devid, loc->function);
+	FILE *f = fopen(filename, "r");
+	if (f) {
+		if (fread(pci_cfg, sizeof(pci_cfg), 1, f) == 1) {
+			uint16_t vid = pci_cfg[0] | (pci_cfg[1] << 8);
+			uint16_t did = pci_cfg[2] | (pci_cfg[3] << 8);
+			uint16_t svid = pci_cfg[0x2c] | (pci_cfg[0x2d] << 8);
+			uint16_t sdid = pci_cfg[0x2e] | (pci_cfg[0x2f] << 8);
+			snprintf(buf, size, "%.4" PRIx16 ":%.4" PRIx16 ":%.4" PRIx16 ":%.4" PRIx16,
+				 vid, did, svid, sdid);
+			fclose(f);
+			return;
+		}
+		fclose(f);
+	}
+	snprintf(buf, size, "0000:0000:0000:0000");
+}
+
 /* dev_port is new in Linux 4.x and only used in
  * multi-port devices that share same PCI address
  * so far this only matters for Mellanox.
@@ -206,11 +230,13 @@ static unsigned int get_dev_port(const struct rte_pci_addr *loc)
 
 static unsigned int get_dev_port_cxgbe(int portid)
 {
-	const struct rte_eth_dev *dev = &rte_eth_devices[portid];
+	char name_buf[RTE_ETH_NAME_MAX_LEN] = "";
 	char *p;
 	int dev_port = 0;
 
-	p = strchr(dev->data->name, '_');
+	rte_eth_dev_get_name_by_port(portid, name_buf);
+
+	p = strchr(name_buf, '_');
 	if (p)
 		dev_port = atoi(++p);
 
@@ -267,32 +293,28 @@ static void json_bus_info(json_writer_t *wr, portid_t portid,
 			  const char *backplane_name)
 {
 	struct rte_eth_dev_info dev_info;
+	char dev_name_buf[RTE_ETH_NAME_MAX_LEN] = "";
 
-	rte_eth_dev_info_get(portid, &dev_info);
+	int ret = rte_eth_dev_info_get(portid, &dev_info);
+	if (ret < 0)
+		return;
+
+	rte_eth_dev_get_name_by_port(portid, dev_name_buf);
+
 	if (dev_info.driver_name) {
 		jsonw_string_field(wr, "driver", dev_info.driver_name);
 
 		if (strcasestr(dev_info.driver_name, "net_netvsc") != NULL) {
-			const struct rte_eth_dev *dev =
-				&rte_eth_devices[portid];
 			jsonw_uint_field(wr, "slot",
-					 get_vmbus_id(dev->data->name));
+					 get_vmbus_id(dev_name_buf));
 			return;
 		}
 
 		if (strcmp(dev_info.driver_name, "net_xen_netfront") == 0) {
-			const struct rte_eth_dev *dev =
-				&rte_eth_devices[portid];
 			unsigned int devid;
 			char buf[PATH_MAX];
 
-			/*
-			 * Although the new Xen PMD is no longer using a fake
-			 * PCI device the controller expects the device to
-			 * have a PCI address. Lets continue what the old Xen
-			 * PMD did and place the devid into the busid field.
-			 */
-			if (sscanf(dev->data->name, "vif-%u", &devid) == 1) {
+			if (sscanf(dev_name_buf, "vif-%u", &devid) == 1) {
 				snprintf(buf, PATH_MAX, PCI_PRI_FMT,
 					 0, 0, devid, 0);
 				jsonw_string_field(wr, "pci-address", buf);
@@ -310,34 +332,27 @@ static void json_bus_info(json_writer_t *wr, portid_t portid,
 			return;
 	}
 
-	const struct rte_bus *bus = rte_bus_find_by_device(dev_info.device);
-	struct rte_pci_device *pci = NULL;
-	if (bus && streq(bus->name, "pci"))
-		pci = RTE_DEV_TO_PCI(dev_info.device);
-	if (pci) {
-		const struct rte_pci_addr *loc = &pci->addr;
+	const char *dname = dev_info.device ? rte_dev_name(dev_info.device) : NULL;
+	struct rte_pci_addr loc;
+	if (dname && rte_pci_addr_parse(dname, &loc) == 0) {
 		char buf[PATH_MAX];
 
 		snprintf(buf, PATH_MAX, PCI_PRI_FMT,
-			 loc->domain, loc->bus, loc->devid, loc->function);
+			 loc.domain, loc.bus, loc.devid, loc.function);
 		jsonw_string_field(wr, "pci-address", buf);
 
-		const struct rte_pci_id *id = &pci->id;
-		snprintf(buf, PATH_MAX,
-			 "%.4" PRIx16 ":%.4" PRIx16 ":%.4" PRIx16 ":%.4" PRIx16,
-			 id->vendor_id, id->device_id,
-			 id->subsystem_vendor_id, id->subsystem_device_id);
+		get_pci_id_str(&loc, buf, sizeof(buf));
 		jsonw_string_field(wr, "pci-id", buf);
 
-		int index = get_firmware_index(loc);
+		int index = get_firmware_index(&loc);
 		if (index > 0 && !firmware_is_broken)
 			jsonw_uint_field(wr, "firmware", (unsigned int)index);
 
-		int slot = get_hotplug_slot(loc);
+		int slot = get_hotplug_slot(&loc);
 		if (slot >= 0)
 			jsonw_uint_field(wr, "slot", (unsigned int)slot);
 
-		int dev_port = get_dev_port(loc);
+		int dev_port = get_dev_port(&loc);
 
 		if (dev_info.driver_name &&
 		    strcasestr(dev_info.driver_name, "net_cxgbe") != NULL)
@@ -346,7 +361,7 @@ static void json_bus_info(json_writer_t *wr, portid_t portid,
 		if (dev_port > 0)
 			jsonw_uint_field(wr, "dev-port", (unsigned int)dev_port);
 
-		jsonw_bool_field(wr, "multifunction", is_multifunction(loc));
+		jsonw_bool_field(wr, "multifunction", is_multifunction(&loc));
 	}
 }
 
@@ -424,7 +439,6 @@ char *dpdk_eth_vplaned_devinfo(portid_t port_id)
 	char name[IFNAMSIZ];
 	char *outbuf = NULL;
 	size_t outsize = 0;
-	struct rte_eth_dev *eth_dev;
 	unsigned int if_flags = 0;
 	unsigned int mtu = 0;
 	char dev_name[RTE_ETH_NAME_MAX_LEN];
@@ -455,13 +469,14 @@ char *dpdk_eth_vplaned_devinfo(portid_t port_id)
 	char ebuf[32];
 	jsonw_string_field(wr, "mac", ether_ntoa_r(&mac_addr, ebuf));
 
-	/* Shouldn't be looking inside DPDK but there is no documented
-	 * way to get DPDK name which is used by bond driver.
-	 */
-	eth_dev = &rte_eth_devices[port_id];
-	rte_eth_dev_info_get(port_id, &dev_info);
+	char eth_dev_name[RTE_ETH_NAME_MAX_LEN] = "";
+	rte_eth_dev_get_name_by_port(port_id, eth_dev_name);
 
-	if (strcasestr(dev_info.driver_name, "af_packet") &&
+	int rc_info = rte_eth_dev_info_get(port_id, &dev_info);
+	if (rc_info < 0)
+		memset(&dev_info, 0, sizeof(dev_info));
+
+	if (dev_info.driver_name && strcasestr(dev_info.driver_name, "af_packet") &&
 	    if_indextoname(dev_info.if_index, name) != NULL) {
 		struct ifreq ifr;
 		int fd;
@@ -481,22 +496,22 @@ char *dpdk_eth_vplaned_devinfo(portid_t port_id)
 			}
 			close(fd);
 		}
-	} else if (!strncmp(eth_dev->data->name, "eth_vhost", 9))
+	} else if (!strncmp(eth_dev_name, "eth_vhost", 9))
 		/* send name as "vhost1" with "eth_" to controller */
-		jsonw_string_field(wr, "name", eth_dev->data->name + 4);
-	else if (get_switch_dev_info(dev_info.driver_name, eth_dev->data->name,
+		jsonw_string_field(wr, "name", eth_dev_name + 4);
+	else if (dev_info.driver_name && get_switch_dev_info(dev_info.driver_name, eth_dev_name,
 				     &switch_id, dev_name))
 		jsonw_string_field(wr, "name", dev_name);
-	else if (!strncmp(eth_dev->data->name,
+	else if (dev_info.driver_name && !strncmp(eth_dev_name,
 					  dev_info.driver_name,
 					  strlen(dev_info.driver_name)))
 		/* strip off the driver prefix for controller */
-		jsonw_string_field(wr, "name", eth_dev->data->name +
+		jsonw_string_field(wr, "name", eth_dev_name +
 				strlen(dev_info.driver_name));
 	else if (backplane_port_get_name(port_id, &backplane_name) == 0)
 		jsonw_string_field(wr, "name", backplane_name);
 	else
-		jsonw_string_field(wr, "name", eth_dev->data->name);
+		jsonw_string_field(wr, "name", eth_dev_name);
 
 	/* Backplane ports should be admin UP by default and
 	 * configured to the largest possible MTU.

@@ -120,7 +120,9 @@ fal_lag_create(const struct ifinfomsg *ifi, struct nlattr *tb[])
 	for (dpdk_port = 0; dpdk_port < DATAPLANE_MAX_PORTS; dpdk_port++) {
 		if (!rte_eth_dev_is_valid_port(dpdk_port))
 			continue;
-		rte_eth_dev_info_get(dpdk_port, &dev_info);
+		if (rte_eth_dev_info_get(dpdk_port, &dev_info) < 0 ||
+		    !dev_info.driver_name)
+			continue;
 		if (strcmp(dev_info.driver_name, "net_sw_port") != 0)
 			continue;
 		if (sw_port_get_dev_info(dpdk_port, &swport_dev_info) < 0)

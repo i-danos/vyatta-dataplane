@@ -12,7 +12,6 @@
 #define ALLOW_INTERNAL_API /* so we can use use rte_eth_dev_allocated() */
 #include <rte_debug.h>
 #include <rte_ethdev.h>
-#include <rte_ethdev_driver.h>
 #include <rte_log.h>
 #include <setjmp.h>
 #include <stdbool.h>
@@ -50,36 +49,29 @@ int detach_device(const char *name)
 	struct rte_eth_dev_info dev_info;
 	struct ifnet *ifp;
 	portid_t port_id;
-	struct rte_eth_dev *dev;
 	int ret = 0;
-
 	/* Look for interface by pci string or name */
 	if (rte_eth_dev_get_port_by_name(name, &port_id) != 0) {
-		dev = rte_eth_dev_allocated(name);
-		if (dev)
-			port_id = dev->data->port_id;
-		else {
-			ifp  = dp_ifnet_byifname(name);
-			if (!ifp) {
-				RTE_LOG(NOTICE, DATAPLANE,
-					"detach-device(%s): already unplugged and deleted\n",
-					name);
-				return 0;
-			}
-			if (ifp->if_type != IFT_ETHER) {
-				RTE_LOG(ERR, DATAPLANE,
-					"detach-device(%s): not a DPDK port\n",
-					name);
-				return -1;
-			}
-			if (ifp->unplugged) {
-				RTE_LOG(NOTICE, DATAPLANE,
-					"detach-device(%s): already unplugged\n",
-					name);
-				return 0;
-			}
-			port_id = ifp->if_port;
+		ifp  = dp_ifnet_byifname(name);
+		if (!ifp) {
+			RTE_LOG(NOTICE, DATAPLANE,
+				"detach-device(%s): already unplugged and deleted\n",
+				name);
+			return 0;
 		}
+		if (ifp->if_type != IFT_ETHER) {
+			RTE_LOG(ERR, DATAPLANE,
+				"detach-device(%s): not a DPDK port\n",
+				name);
+			return -1;
+		}
+		if (ifp->unplugged) {
+			RTE_LOG(NOTICE, DATAPLANE,
+				"detach-device(%s): already unplugged\n",
+				name);
+			return 0;
+		}
+		port_id = ifp->if_port;
 	}
 
 	ifp = ifport_table[port_id];
@@ -109,7 +101,8 @@ int detach_device(const char *name)
 	shadow_uninit_port(port_id);
 	remove_port(port_id);
 
-	rte_eth_dev_info_get(port_id, &dev_info);
+	if (rte_eth_dev_info_get(port_id, &dev_info) < 0)
+		memset(&dev_info, 0, sizeof(dev_info));
 
 	if (sigsetjmp(hotplug_jmpbuf, 1)) {
 		RTE_LOG(DEBUG, DATAPLANE,
@@ -136,15 +129,13 @@ int detach_device(const char *name)
 int attach_device(const char *name)
 {
 	portid_t port_id;
-	struct rte_eth_dev *dev;
 	int rv = 0;
 
 	/*
 	 * In case of dataplane restart, the device may have been
 	 * created earlier due to signaling from the controller.
 	 */
-	dev = rte_eth_dev_allocated(name);
-	if (dev != NULL) {
+	if (rte_eth_dev_get_port_by_name(name, &port_id) == 0) {
 		RTE_LOG(INFO, DATAPLANE,
 			"Re-attached to device %s\n", name);
 		return 0;

@@ -173,10 +173,7 @@ dpdk_lag_create(const struct ifinfomsg *ifi, struct nlattr *tb[])
 
 static bool dpdk_eth_if_is_dev_started(struct ifnet *ifp)
 {
-	struct rte_eth_dev *dev;
-
-	dev = &rte_eth_devices[ifp->if_port];
-	return dev->data->dev_started != 0;
+	return (ifp->if_flags & IFF_UP) != 0;
 }
 
 static int member_add(struct ifnet *team, struct ifnet *ifp)
@@ -193,8 +190,10 @@ static int member_add(struct ifnet *team, struct ifnet *ifp)
 		return -EEXIST;
 	}
 
-	rte_eth_dev_info_get(team->if_port, &team_info);
-	rte_eth_dev_info_get(ifp->if_port, &member_info);
+	if (rte_eth_dev_info_get(team->if_port, &team_info) < 0)
+		memset(&team_info, 0, sizeof(team_info));
+	if (rte_eth_dev_info_get(ifp->if_port, &member_info) < 0)
+		memset(&member_info, 0, sizeof(member_info));
 	bond_dev_started = dpdk_eth_if_is_dev_started(team);
 
 	/* Ignore VMDQ information since we know that the BOND pmd
@@ -449,7 +448,8 @@ static void dpdk_lag_delete(struct ifnet *team_ifp)
 	if_free(team_ifp);
 	remove_port(port_id);
 
-	rte_eth_dev_info_get(port_id, &dev_info);
+	if (rte_eth_dev_info_get(port_id, &dev_info) < 0)
+		memset(&dev_info, 0, sizeof(dev_info));
 	rte_eth_dev_close(port_id);
 	if (rte_dev_remove(dev_info.device) != 0)
 		RTE_LOG(ERR, DATAPLANE,

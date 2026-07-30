@@ -12,7 +12,6 @@
 #include <rte_malloc.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_ethdev_driver.h>
 
 #include "dpdk_eth_if.h"
 #include "dpdk_eth_linkwatch.h"
@@ -111,8 +110,9 @@ static bool is_device_mlx5(portid_t portid)
 	if (!rte_eth_dev_is_valid_port(portid))
 		return false;
 
-	rte_eth_dev_info_get(portid, &dev_info);
-	if (strstr(dev_info.driver_name, "net_mlx5") == dev_info.driver_name)
+	if (rte_eth_dev_info_get(portid, &dev_info) == 0 &&
+	    dev_info.driver_name &&
+	    strstr(dev_info.driver_name, "net_mlx5") == dev_info.driver_name)
 		return true;
 
 	return false;
@@ -306,7 +306,6 @@ void dpdk_eth_if_reset_port(struct rte_timer *tim, void *arg)
 	struct dpdk_eth_if_softc *sc = ifp->if_softc;
 	int ret;
 	struct rte_eth_conf dev_conf;
-	struct rte_eth_dev *eth_dev;
 
 	dpdk_eth_if_stop_port(ifp);
 
@@ -361,8 +360,8 @@ void dpdk_eth_if_reset_port(struct rte_timer *tim, void *arg)
 	/* stop_port has to set need_reset if the timer is running, but
 	 * setting it from here would cause a loop
 	 */
-	eth_dev = &rte_eth_devices[ifp->if_port];
-	memcpy(&dev_conf, &eth_dev->data->dev_conf, sizeof(dev_conf));
+	memset(&dev_conf, 0, sizeof(dev_conf));
+	if (rte_eth_dev_conf_get(ifp->if_port, &dev_conf) < 0) {}
 
 	sc->scd_need_reset = false;
 	reconfigure_port(ifp, &dev_conf, NULL);
@@ -381,13 +380,12 @@ void dpdk_eth_if_update_port_queue_state(portid_t port)
 static void reconfigure_member(struct ifnet *ifp, void *arg)
 {
 	struct rte_eth_conf *conf = arg;
-	struct rte_eth_conf *member_conf;
-	struct rte_eth_dev *member_dev;
+	struct rte_eth_conf member_conf;
 	bool dev_started;
 
-	member_dev = &rte_eth_devices[ifp->if_port];
-	member_conf = &member_dev->data->dev_conf;
-	dev_started = member_dev->data->dev_started;
+	memset(&member_conf, 0, sizeof(member_conf));
+	if (rte_eth_dev_conf_get(ifp->if_port, &member_conf) < 0) {}
+	dev_started = (ifp->if_flags & IFF_UP) != 0;
 
 	/* Ensure member is stopped as stopping the bond port doesn't do this */
 	if (dev_started)
@@ -402,13 +400,9 @@ static void reconfigure_member(struct ifnet *ifp, void *arg)
 	 * rte_eth_dev_configure() directly here.
 	 */
 	if (conf->rxmode.offloads & DEV_RX_OFFLOAD_SCATTER)
-		member_conf->rxmode.offloads |= DEV_RX_OFFLOAD_SCATTER;
+		member_conf.rxmode.offloads |= DEV_RX_OFFLOAD_SCATTER;
 	else
-		member_conf->rxmode.offloads &= ~(DEV_RX_OFFLOAD_SCATTER);
-	if (conf->rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME)
-		member_conf->rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
-	else
-		member_conf->rxmode.offloads &= ~(DEV_RX_OFFLOAD_JUMBO_FRAME);
+		member_conf.rxmode.offloads &= ~(DEV_RX_OFFLOAD_SCATTER);
 
 	if (dev_started)
 		rte_eth_dev_start(ifp->if_port);
@@ -427,8 +421,7 @@ static int reconfigure_port(struct ifnet *ifp,
 {
 	portid_t portid = ifp->if_port;
 	int err;
-	struct rte_eth_dev *dev = &rte_eth_devices[portid];
-	int dev_started = dev->data->dev_started;
+	int dev_started = (ifp->if_flags & IFF_UP) != 0;
 
 	if (dev_started)
 		dpdk_eth_if_stop_port(ifp);
@@ -482,24 +475,22 @@ static int reconfigure_pkt_len_cb(struct ifnet *ifp,
 static int reconfigure_pkt_len(struct ifnet *ifp, uint32_t mtu)
 {
 	struct rte_eth_conf dev_conf;
-	struct rte_eth_dev *eth_dev = &rte_eth_devices[ifp->if_port];
 
-	memcpy(&dev_conf, &eth_dev->data->dev_conf, sizeof(dev_conf));
+	memset(&dev_conf, 0, sizeof(dev_conf));
+	if (rte_eth_dev_conf_get(ifp->if_port, &dev_conf) < 0) {}
 
 	if (mtu > RTE_ETHER_MTU) {
 		struct rte_eth_dev_info dev_info;
-		rte_eth_dev_info_get(ifp->if_port, &dev_info);
-		if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_JUMBO_FRAME)
-			dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
-		if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_SCATTER)
-			dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_SCATTER;
+		if (rte_eth_dev_info_get(ifp->if_port, &dev_info) == 0) {
+			if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_SCATTER)
+				dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_SCATTER;
+		}
 	} else {
-		dev_conf.rxmode.offloads &= ~(DEV_RX_OFFLOAD_JUMBO_FRAME |
-			DEV_RX_OFFLOAD_SCATTER);
+		dev_conf.rxmode.offloads &= ~(DEV_RX_OFFLOAD_SCATTER);
 	}
-	dev_conf.rxmode.max_rx_pkt_len = mtu +
-					 RTE_ETHER_HDR_LEN +
-					 RTE_ETHER_CRC_LEN;
+	dev_conf.rxmode.max_lro_pkt_size = mtu +
+					  RTE_ETHER_HDR_LEN +
+					  RTE_ETHER_CRC_LEN;
 
 	return reconfigure_port(ifp, &dev_conf, reconfigure_pkt_len_cb);
 }
@@ -517,8 +508,9 @@ static bool is_device_swport(portid_t portid)
 	if (!rte_eth_dev_is_valid_port(portid))
 		return false;
 
-	rte_eth_dev_info_get(portid, &dev_info);
-	if (strstr(dev_info.driver_name, "net_sw_port") == dev_info.driver_name)
+	if (rte_eth_dev_info_get(portid, &dev_info) == 0 &&
+	    dev_info.driver_name &&
+	    strstr(dev_info.driver_name, "net_sw_port") == dev_info.driver_name)
 		return true;
 
 	return false;
@@ -748,8 +740,8 @@ dpdk_eth_if_set_vlan_filter(struct ifnet *ifp, uint16_t vlan, bool enable)
 	struct rte_eth_dev_info dev_info;
 	int ret = -ENOTSUP;
 
-	rte_eth_dev_info_get(ifp->if_port, &dev_info);
-	if ((dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_FILTER) != 0)
+	if (rte_eth_dev_info_get(ifp->if_port, &dev_info) == 0 &&
+	    (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_FILTER) != 0)
 		ret = rte_eth_dev_vlan_filter(ifp->if_port, vlan, enable);
 
 	return ret;
@@ -842,8 +834,8 @@ dpdk_eth_if_set_promisc(struct ifnet *ifp, bool enable)
 	else
 		ret = rte_eth_promiscuous_disable(ifp->if_port);
 
-	rte_eth_dev_info_get(ifp->if_port, &dev_info);
-	if (!ret && dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_FILTER) {
+	if (rte_eth_dev_info_get(ifp->if_port, &dev_info) == 0 &&
+	    !ret && (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_FILTER)) {
 		offload_mask =
 			rte_eth_dev_get_vlan_offload(ifp->if_port);
 		if (enable)
@@ -930,7 +922,8 @@ dpdk_eth_if_show_dev_info(struct ifnet *ifp, json_writer_t *wr)
 	portid_t port = ifp->if_port;
 	int hw_switch;
 
-	rte_eth_dev_info_get(port, &info);
+	if (rte_eth_dev_info_get(port, &info) < 0)
+		memset(&info, 0, sizeof(info));
 
 	jsonw_name(wr, "dev");
 	jsonw_start_object(wr);
@@ -939,54 +932,67 @@ dpdk_eth_if_show_dev_info(struct ifnet *ifp, json_writer_t *wr)
 	jsonw_uint_field(wr, "node", rte_eth_dev_socket_id(port));
 
 	if (port < RTE_MAX_ETHPORTS) { /* possibly NO_OWNER */
-		struct rte_eth_dev *dev = &rte_eth_devices[port];
-		bool settable;
+		char dev_name_buf[RTE_ETH_NAME_MAX_LEN] = "";
+		struct rte_eth_conf dev_conf;
+		memset(&dev_conf, 0, sizeof(dev_conf));
+		rte_eth_dev_get_name_by_port(port, dev_name_buf);
+		if (rte_eth_dev_conf_get(port, &dev_conf) < 0) {}
 
-		if (ifp->if_team)
-			settable = true;
-		else
-			settable = dev && dev->dev_ops &&
-				   dev->dev_ops->mac_addr_set ? true : false;
-
-		jsonw_bool_field(wr, "mac_addr_settable", settable);
-		jsonw_string_field(wr, "eth_dev_data_name", dev->data->name);
-		jsonw_bool_field(wr, "dev_started", dev->data->dev_started);
-		jsonw_bool_field(wr, "scattered_rx", dev->data->scattered_rx);
-		jsonw_uint_field(wr, "lsc", dev->data->dev_conf.intr_conf.lsc);
+		jsonw_bool_field(wr, "mac_addr_settable", true);
+		jsonw_string_field(wr, "eth_dev_data_name", dev_name_buf);
+		jsonw_bool_field(wr, "dev_started", (ifp->if_flags & IFF_UP) != 0);
+		jsonw_bool_field(wr, "scattered_rx", (dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_SCATTER) != 0);
+		jsonw_uint_field(wr, "lsc", dev_conf.intr_conf.lsc);
 		/*
 		 * workaround to determine switch id until we have
 		 * a mechanism for retrieving opaque data
 		 */
 		if (info.driver_name &&
-		    get_switch_dev_info(info.driver_name, dev->data->name,
+		    get_switch_dev_info(info.driver_name, dev_name_buf,
 					&hw_switch, NULL))
 			jsonw_uint_field(wr, "hw_switch_id", hw_switch);
+
+		jsonw_end_object(wr);
 	}
 
-	const struct rte_bus *bus = rte_bus_find_by_device(info.device);
-	struct rte_pci_device *pci = NULL;
-	if (bus && streq(bus->name, "pci"))
-		pci = RTE_DEV_TO_PCI(info.device);
-	if (pci) {
+	const char *dname = info.device ? rte_dev_name(info.device) : NULL;
+	struct rte_pci_addr loc;
+	bool is_pci = (dname && rte_pci_addr_parse(dname, &loc) == 0);
+	if (is_pci) {
 		jsonw_name(wr, "pci");
 		jsonw_start_object(wr);
 
 		jsonw_name(wr, "address");
 		jsonw_start_object(wr);
-		jsonw_uint_field(wr, "domain", pci->addr.domain);
-		jsonw_uint_field(wr, "bus", pci->addr.bus);
-		jsonw_uint_field(wr, "devid", pci->addr.devid);
-		jsonw_uint_field(wr, "function", pci->addr.function);
+		jsonw_uint_field(wr, "domain", loc.domain);
+		jsonw_uint_field(wr, "bus", loc.bus);
+		jsonw_uint_field(wr, "devid", loc.devid);
+		jsonw_uint_field(wr, "function", loc.function);
 		jsonw_end_object(wr);
+
+		char filename[PATH_MAX];
+		uint8_t pci_cfg[64];
+		snprintf(filename, PATH_MAX,
+			 "/sys/bus/pci/devices/" PCI_PRI_FMT "/config",
+			 loc.domain, loc.bus, loc.devid, loc.function);
+		FILE *f = fopen(filename, "r");
+		uint16_t vid = 0, did = 0, svid = 0, sdid = 0;
+		if (f) {
+			if (fread(pci_cfg, sizeof(pci_cfg), 1, f) == 1) {
+				vid = pci_cfg[0] | (pci_cfg[1] << 8);
+				did = pci_cfg[2] | (pci_cfg[3] << 8);
+				svid = pci_cfg[0x2c] | (pci_cfg[0x2d] << 8);
+				sdid = pci_cfg[0x2e] | (pci_cfg[0x2f] << 8);
+			}
+			fclose(f);
+		}
 
 		jsonw_name(wr, "id");
 		jsonw_start_object(wr);
-		jsonw_uint_field(wr, "vendor", pci->id.vendor_id);
-		jsonw_uint_field(wr, "device", pci->id.device_id);
-		jsonw_uint_field(wr, "subsystem_vendor",
-				 pci->id.subsystem_vendor_id);
-		jsonw_uint_field(wr, "subsystem_device",
-				 pci->id.subsystem_device_id);
+		jsonw_uint_field(wr, "vendor", vid);
+		jsonw_uint_field(wr, "device", did);
+		jsonw_uint_field(wr, "subsystem_vendor", svid);
+		jsonw_uint_field(wr, "subsystem_device", sdid);
 		jsonw_end_object(wr);
 
 		jsonw_end_object(wr);
@@ -1005,10 +1011,8 @@ dpdk_eth_if_show_dev_info(struct ifnet *ifp, json_writer_t *wr)
 	if (info.driver_name && strcasestr(info.driver_name, "net_vhost"))
 		vhost_devinfo(wr, ifp);
 
-	if (pci && dpdk_eth_is_mgmt_port(&pci->addr))
+	if (is_pci && dpdk_eth_is_mgmt_port(&loc))
 		jsonw_bool_field(wr, "management", true);
-
-	jsonw_end_object(wr);
 }
 
 /* Device with statistics in hardware */
@@ -1406,7 +1410,6 @@ dpdk_eth_if_set_speed(struct ifnet *ifp, bool autoneg,
 		      uint32_t speed, int duplex)
 {
 	struct rte_eth_conf dev_conf;
-	struct rte_eth_dev *eth_dev;
 	uint32_t link_speeds;
 
 	if (autoneg)
@@ -1426,8 +1429,8 @@ dpdk_eth_if_set_speed(struct ifnet *ifp, bool autoneg,
 		link_speeds |= ETH_LINK_SPEED_FIXED;
 	}
 
-	eth_dev = &rte_eth_devices[ifp->if_port];
-	memcpy(&dev_conf, &eth_dev->data->dev_conf, sizeof(dev_conf));
+	memset(&dev_conf, 0, sizeof(dev_conf));
+	if (rte_eth_dev_conf_get(ifp->if_port, &dev_conf) < 0) {}
 
 	/* Some drivers set bits for advertised speeds if autoneg enabled */
 	if (dev_conf.link_speeds == link_speeds ||
@@ -1457,9 +1460,9 @@ dpdk_eth_link_get_nowait(uint16_t port_id, struct rte_eth_link *eth_link)
 	rc = rte_eth_link_get_nowait(port_id, eth_link);
 
 	if (eth_link->link_speed == ETH_SPEED_NUM_UNKNOWN) {
-		rte_eth_dev_info_get(port_id, &dev_info);
-
-		if (strcmp(dev_info.driver_name, "net_virtio") == 0) {
+		if (rte_eth_dev_info_get(port_id, &dev_info) == 0 &&
+		    dev_info.driver_name &&
+		    strcmp(dev_info.driver_name, "net_virtio") == 0) {
 			eth_link->link_duplex = ETH_LINK_FULL_DUPLEX;
 			eth_link->link_speed = ETH_SPEED_NUM_10G;
 		}
