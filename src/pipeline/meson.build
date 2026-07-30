@@ -124,18 +124,13 @@ pl_gen_fused_opts = [
 
 pl_gen_fused = files('../../scripts/pl_gen_fused')
 
-pl_fused_gen_h = custom_target('pl_fused_gen.h',
-        output: 'pl_fused_gen.h',
+pl_fused_gen = custom_target('pl_fused_gen',
+        output: ['pl_fused_gen.c', 'pl_fused_gen.h'],
         input: pipeline_node_sources,
-        command: [pl_gen_fused,  pl_gen_fused_opts, '--header-out', '@OUTPUT@', '@INPUT@']
+        command: [pl_gen_fused, pl_gen_fused_opts, '--impl-out', '@OUTPUT0@', '--header-out', '@OUTPUT1@', '@INPUT@']
 )
-
-pl_fused_gen_c = custom_target('pl_fused_gen.c',
-        output: 'pl_fused_gen.c',
-        input: pipeline_node_sources,
-        command: [pl_gen_fused,  pl_gen_fused_opts, '--impl-out', '@OUTPUT@', '@INPUT@'],
-        depends: pl_fused_gen_h
-)
+pl_fused_gen_c = pl_fused_gen[0]
+pl_fused_gen_h = pl_fused_gen[1]
 
 pipeline_inc = include_directories('.')
 

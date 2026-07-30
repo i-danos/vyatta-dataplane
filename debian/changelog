@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.25) unstable; urgency=medium
+
+  * Upgrade DPDK version dependency to 24.11.6
+
+ -- Developer <developer@vyatta.com>  Wed, 29 Jul 2026 19:48:35 +0800
+
 vyatta-dataplane (3.14.24) unstable; urgency=medium
 
   [ kalaivani vinothkumar ]

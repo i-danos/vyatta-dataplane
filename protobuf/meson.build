@@ -38,6 +38,13 @@ install_data(protobuf_sources,
 )
 
 protoc = find_program('protoc')
+protoc_gen_go = find_program('protoc-gen-go', required: false)
+perl = find_program('perl', required: false)
+if perl.found()
+        have_perl_pb = run_command(perl, '-MGoogle::ProtocolBuffers', '-e', '1', check: false).returncode() == 0
+else
+        have_perl_pb = false
+endif
 perl_protobuf_generator = files('../scripts/vyatta-generate-pb-perl.pl')
 
 protobuf_generated_c = []
@@ -74,21 +81,25 @@ foreach protobuf_definition : protobuf_sources
                 install_dir: 'lib/python3/dist-packages/vyatta/proto'
         )
 
-        protobuf_generated_go += custom_target('go_' + protobuf_definition,
-                command: [protoc, '--proto_path=@CURRENT_SOURCE_DIR@', '--go_out=paths=source_relative:@OUTDIR@', '@INPUT@'],
-                input: protobuf_definition,
-                output: '@BASENAME@.pb.go',
-                install: true,
-                install_dir: 'share/gocode/src/github.com/danos/vyatta-dataplane/protobuf/go/@0@'.format(protobuf_definition.split('.')[0])
-        )
+        if protoc_gen_go.found()
+                protobuf_generated_go += custom_target('go_' + protobuf_definition,
+                        command: [protoc, '--plugin=protoc-gen-go=' + protoc_gen_go.full_path(), '--proto_path=@CURRENT_SOURCE_DIR@', '--go_out=paths=source_relative:@OUTDIR@', '@INPUT@'],
+                        input: protobuf_definition,
+                        output: '@BASENAME@.pb.go',
+                        install: true,
+                        install_dir: 'share/gocode/src/github.com/danos/vyatta-dataplane/protobuf/go/@0@'.format(protobuf_definition.split('.')[0])
+                )
+        endif
 
-        protobuf_generated_perl += custom_target('pl_' + protobuf_definition,
-                command: [perl_protobuf_generator, '@INPUT@', '@OUTDIR@', '@CURRENT_SOURCE_DIR@'],
-                input: protobuf_definition,
-                output: '@BASENAME@.pm',
-                install: true,
-                install_dir: 'share/perl5/vyatta/proto'
-        )
+        if have_perl_pb
+                protobuf_generated_perl += custom_target('pl_' + protobuf_definition,
+                        command: [perl_protobuf_generator, '@INPUT@', '@OUTDIR@', '@CURRENT_SOURCE_DIR@'],
+                        input: protobuf_definition,
+                        output: '@BASENAME@.pm',
+                        install: true,
+                        install_dir: 'share/perl5/vyatta/proto'
+                )
+        endif
 
 endforeach
 
