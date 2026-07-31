@@ -76,6 +76,7 @@ core_sources = files(
         'ether.c',
         'event.c',
         'fal.c',
+        'fal_sw.c',
         'feature_plugin.c',
         'flow_cache.c',
         'if/bridge/bridge.c',

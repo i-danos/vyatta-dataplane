@@ -662,6 +662,7 @@ struct fal_bfd_ops {
 
 void fal_init(void);
 void fal_init_plugins(void);
+void fal_sw_init(void);
 void fal_cleanup(void);
 int  cmd_fal(FILE *f, int argc, char **argv);
 bool fal_plugins_present(void);

@@ -738,6 +738,8 @@ void fal_init_plugins(void)
 	/* load plugin from platform.conf (if set) */
 	if (platform_cfg.fal_plugin)
 		fal_init_plugin(platform_cfg.fal_plugin);
+	else
+		fal_sw_init();
 }
 
 void fal_register_message_handler(struct message_handler *handler)
