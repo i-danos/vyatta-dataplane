@@ -39,7 +39,7 @@ eth_dev_set_link(struct rte_eth_dev *dev, int state)
 	struct fal_sw_port *port = sw_port_fal_priv_from_dev(dev);
 
 	port->link.link_speed = ETH_SPEED_NUM_10G;
-	port->link.link_duplex = ETH_LINK_FULL_DUPLEX;
+	port->link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
 	port->link.link_status = state;
 
 	return 0;
@@ -48,13 +48,13 @@ eth_dev_set_link(struct rte_eth_dev *dev, int state)
 static int
 eth_dev_set_link_up(struct rte_eth_dev *dev)
 {
-	return eth_dev_set_link(dev, ETH_LINK_UP);
+	return eth_dev_set_link(dev, RTE_ETH_LINK_UP);
 }
 
 static int
 eth_dev_set_link_down(struct rte_eth_dev *dev)
 {
-	return eth_dev_set_link(dev, ETH_LINK_DOWN);
+	return eth_dev_set_link(dev, RTE_ETH_LINK_DOWN);
 }
 
 static int
@@ -138,31 +138,18 @@ eth_mac_addr_add(struct rte_eth_dev *dev __rte_unused,
 }
 
 static void
-eth_queue_release(void *q __rte_unused)
+eth_queue_release(struct rte_eth_dev *dev __rte_unused,
+		  uint16_t queue_id __rte_unused)
 {
 }
 
-
-struct eth_dev_ops {
-	int (*dev_start)(struct rte_eth_dev *);
-	int (*dev_stop)(struct rte_eth_dev *);
-	int (*dev_set_link_up)(struct rte_eth_dev *);
-	int (*dev_set_link_down)(struct rte_eth_dev *);
-	int (*dev_configure)(struct rte_eth_dev *);
-	int (*dev_infos_get)(struct rte_eth_dev *, struct rte_eth_dev_info *);
-	int (*rx_queue_setup)(struct rte_eth_dev *, uint16_t, uint16_t, unsigned int, const struct rte_eth_rxconf *, struct rte_mempool *);
-	int (*tx_queue_setup)(struct rte_eth_dev *, uint16_t, uint16_t, unsigned int, const struct rte_eth_txconf *);
-	void (*rx_queue_release)(void *);
-	void (*tx_queue_release)(void *);
-	int (*link_update)(struct rte_eth_dev *, int);
-	int (*stats_get)(struct rte_eth_dev *, struct rte_eth_stats *);
-	int (*stats_reset)(struct rte_eth_dev *);
-	void (*mac_addr_remove)(struct rte_eth_dev *, uint32_t);
-	int (*mac_addr_add)(struct rte_eth_dev *, struct rte_ether_addr *, uint32_t, uint32_t);
-	int (*get_module_info)(struct rte_eth_dev *, struct rte_eth_dev_module_info *);
-	int (*get_module_eeprom)(struct rte_eth_dev *, struct rte_dev_eeprom_info *);
-};
-
+/*
+ * struct eth_dev_ops comes from DPDK's ethdev_driver.h (pulled in
+ * transitively via vyatta_swport.h's driver-SDK shim, see
+ * vyatta-dpdk-swport/dpdk-driver-sdk-shim/README.md). This file used to
+ * carry its own hand-rolled copy because that header wasn't reachable;
+ * that copy is gone now to avoid a duplicate-definition clash.
+ */
 static const struct eth_dev_ops eth_ops = {
 	.dev_start = eth_dev_start,
 	.dev_stop = eth_dev_stop,
