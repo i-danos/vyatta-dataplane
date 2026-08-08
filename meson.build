@@ -52,7 +52,7 @@ check_dep = dependency('check', required: get_option('with_tests'), static: fals
 crypto_dep = dependency('libcrypto')
 czmq_dep = dependency('libczmq', version: '>= 3.0.2')
 dl_dep = cc.find_library('dl', required : true)
-dpdk_dep = dependency('libdpdk', version: '>= 24.11.6')
+dpdk_dep = dependency('libdpdk', version: '>= 24.11.4')
 ini_dep = cc.find_library('inih', required: true)
 json_dep = dependency('json-c', required: get_option('with_tests'))
 m_dep = cc.find_library('m', required : true)
