@@ -1,3 +1,33 @@
+vyatta-dataplane (3.14.26) unstable; urgency=medium
+
+  * Lower libdpdk-dev dependency from >= 24.11.6 to >= 24.11.4: Debian 13
+    (trixie)'s official archive ships 24.11.4, not 24.11.6, and no code
+    in this tree depends on an API added between those two point
+    releases (validated by a full clean meson+ninja build against
+    24.11.4: 1035/1035 targets, including src/dataplane)
+  * tests/whole_dp: drop the local hand-rolled struct eth_dev_ops in
+    fal_plugin_sw_port.c, which now collides with the real DPDK
+    definition pulled in transitively via vyatta_swport.h (see
+    vyatta-dpdk-swport 0.1.28); update ETH_LINK_* macro names and the
+    eth_queue_release callback signature to match
+  * debian: drop Build-Depends on librte-acl-rcu-qsbr-dq-support-dev and
+    librte-crytpodev-session-sym-pool-empty-dev, and the corresponding
+    rte-acl-rebuild-support / rte-acl-rcu-qsbr-dq-support /
+    rte-crytpodev-session-sym-pool-empty from the binary package's
+    Depends. These were marker packages for Vyatta-only DPDK patches
+    (never upstreamed) that gated older DPDK 20.11-era builds; DPDK
+    24.11 has no such packages, and this tree already has unconditional
+    no-op fallbacks for the ACL RCU QSBR API in src/compat.h, while the
+    crypto session-pool-growing code (crypto_rte_pmd.c) only calls
+    standard, unpatched DPDK mempool/cryptodev APIs. Note: this means
+    ACL rule updates run without the RCU QSBR deferred-reclaim
+    optimisation when built this way -- functionally correct (compat.h's
+    stub just returns success) but not the same performance
+    characteristics as the original vyatta-patched DPDK; worth a
+    conscious decision on whether to port that patch to DPDK 24.x
+
+ -- Developer <developer@vyatta.com>  Fri, 07 Aug 2026 22:05:00 +0800
+
 vyatta-dataplane (3.14.25) unstable; urgency=medium
 
   * Upgrade DPDK version dependency to 24.11.6
