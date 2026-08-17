@@ -11,7 +11,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <vyatta-dataplane/vyatta_swport.h>
 
 #include "dpdk_eth_if.h"
 #include "dp_event.h"
@@ -70,8 +69,6 @@ fal_lag_member_sync_mac_address(struct ifnet *ifp __unused)
 static struct ifnet *
 fal_lag_create(const struct ifinfomsg *ifi, struct nlattr *tb[])
 {
-	struct swport_dev_info swport_dev_info;
-	struct rte_eth_dev_info dev_info;
 	struct rte_ether_addr *macaddr = NULL;
 	struct dpdk_eth_if_softc *sc;
 	fal_object_t fal_lag_obj;
@@ -111,26 +108,14 @@ fal_lag_create(const struct ifinfomsg *ifi, struct nlattr *tb[])
 	}
 
 	/*
-	 * Find the DPDK port ID for the LAG interface just created in
-	 * the FAL. We do it this way (rather than the port ID being
-	 * returned from the FAL call) to lessen the need for the FAL
-	 * API needing to be aware of there being a DPDK PMD backing
-	 * for certain interfaces.
+	 * A FAL LAG is backed by a "net_sw_port" DPDK PMD, which is
+	 * supplied by the switch-vendor swport driver. This build drops
+	 * hardware-vendor support, so no such PMD is ever registered and
+	 * the LAG cannot be backed -- fall through to the error path.
+	 * Software bonding is handled by dpdk_lag_ops, which lag_init()
+	 * selects whenever platform_cfg.hardware_lag is unset.
 	 */
-	for (dpdk_port = 0; dpdk_port < DATAPLANE_MAX_PORTS; dpdk_port++) {
-		if (!rte_eth_dev_is_valid_port(dpdk_port))
-			continue;
-		if (rte_eth_dev_info_get(dpdk_port, &dev_info) < 0 ||
-		    !dev_info.driver_name)
-			continue;
-		if (strcmp(dev_info.driver_name, "net_sw_port") != 0)
-			continue;
-		if (sw_port_get_dev_info(dpdk_port, &swport_dev_info) < 0)
-			continue;
-
-		if (swport_dev_info.fal_obj == fal_lag_obj)
-			break;
-	}
+	dpdk_port = DATAPLANE_MAX_PORTS;
 	if (dpdk_port == DATAPLANE_MAX_PORTS) {
 		RTE_LOG(ERR, DATAPLANE,
 			"unable to find sw_port PMD instance for FAL LAG interface %s with object 0x%lx\n",
@@ -607,23 +592,13 @@ fal_lag_walk_team_members(struct ifnet *ifp __unused,
 }
 
 static bool
-fal_lag_is_team(struct ifnet *ifp)
+fal_lag_is_team(struct ifnet *ifp __unused)
 {
-	struct swport_dev_info swport_dev_info;
-	struct rte_eth_dev_info dev_info = { 0 };
-	int rc;
-
-	rc = rte_eth_dev_info_get(ifp->if_port, &dev_info);
-	if (rc || dev_info.driver_name == NULL)
-		return false;
-
-	if (strcmp(dev_info.driver_name, "net_sw_port") != 0)
-		return false;
-
-	if (sw_port_get_dev_info(ifp->if_port, &swport_dev_info) < 0)
-		return false;
-
-	return swport_dev_info.is_lag;
+	/*
+	 * Hardware LAG membership is a property of the swport PMD, which
+	 * this build does not ship. Nothing is ever a FAL LAG team.
+	 */
+	return false;
 }
 
 static bool

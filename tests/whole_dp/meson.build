@@ -223,8 +223,6 @@ sample_test_plugin = shared_module('sample_test',
 
 fal_test_plugin_sources = files(
         'src/fal_plugin_test.c',
-        'src/fal_plugin_sw_port.c',
-        'src/fal_plugin_framer.c',
         'src/fal_plugin_qos.c',
         'src/fal_plugin_pm.c',
         'src/fal_plugin_policer.c',
@@ -240,7 +238,6 @@ fal_test_plugin = shared_module('fal_plugin_test',
                 json_dep,
                 pipeline_dep,
                 protobuf_generated_c_dependency,
-                swport_dep,
         ],
         include_directories: [public_include, internal_inc],
         override_options: [

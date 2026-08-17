@@ -35,13 +35,15 @@ add_project_arguments(
                 '-Wno-deprecated-declarations',
                 '-Wno-stringop-overflow',
                 '-Wno-stringop-truncation',
-                '-Wno-format-truncation'
+                '-Wno-format-truncation',
+                '-Wno-stringop-overread'
         ]),
         language: 'c'
 )
 
 add_project_link_arguments(
         cc.get_supported_link_arguments([
+                '-Wno-stringop-overread',
                 '-Wno-stringop-overflow' # 3 warnings in npf code
         ]),
         language: 'c'
@@ -66,7 +68,7 @@ rte_bus_vdev_dep = cc.find_library('rte_bus_vdev', required : true)
 rte_net_bond_dep = cc.find_library('rte_net_bond', required : true)
 rte_net_ring_dep = cc.find_library('rte_net_ring', required: get_option('with_tests'))
 rte_net_vhost_dep = cc.find_library('rte_net_vhost', required : true)
-swport_dep = dependency('vyatta-dpdk-swport', version: '>= 0.1.3')
+# swport_dep: 交换机厂商 PMD，纯软件路线已移除
 systemd_dep = dependency('libsystemd', required: get_option('use_systemd'))
 threads_dep = dependency('threads')
 urcu_cds_dep = dependency('liburcu-cds', version: '>= 0.8.0')
