@@ -337,7 +337,6 @@ dataplane_deps = [
         rte_bus_vdev_dep,
         rte_net_bond_dep,
         rte_net_vhost_dep,
-        swport_dep,
         systemd_dep,
         threads_dep,
         urcu_cds_dep,
