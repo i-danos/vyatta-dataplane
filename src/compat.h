@@ -19,6 +19,7 @@
 #include <linux/if.h>
 #include <linux/if_tunnel.h>
 #include <linux/if_tun.h>
+#include <linux/mpls.h>
 #include <sys/socket.h>
 
 #include <rte_bus.h>
@@ -35,7 +36,16 @@
 #define RTE_LOGTYPE_MBUF RTE_LOGTYPE_USER1
 #endif
 
-#ifndef TUN_META_DEFINED
+/*
+ * Debian trixie's linux-vyatta kernel headers already ship this
+ * Vyatta extension (linux/if_tun.h) unconditionally, unguarded by
+ * TUN_META_DEFINED -- detect it via TUN_META_FLAG_MARK (which it also
+ * always defines) to avoid a struct-redefinition error. Only .flags,
+ * .mark, .iif are ever used in this codebase (see shadow.c/
+ * shadow_receive.c), so the kernel's struct (which lacks the unused
+ * .oif field) is a safe drop-in.
+ */
+#if !defined(TUN_META_DEFINED) && !defined(TUN_META_FLAG_MARK)
 #define TUN_META_DEFINED
 struct tun_meta {
 	uint32_t flags;
@@ -605,6 +615,16 @@ static const char * const rte_crypto_auth_algorithm_strings[] __attribute__((unu
 #define ETH_MQ_RX_VMDQ_DCB_RSS RTE_ETH_MQ_RX_VMDQ_DCB_RSS
 #endif
 
+/*
+ * Debian trixie's linux-vyatta kernel headers already ship linux/mpls.h
+ * with these as real enumerators (RTMPA_TYPE, RTMPA_NH_FLAGS, etc, with
+ * RTMPT_* values that differ from the placeholders below). #ifndef can't
+ * detect an enumerator (it's not a macro), so guard on the header's own
+ * include guard (_MPLS_H) instead -- otherwise this shim both fails to
+ * compile (enumerator redeclaration) and, for the plain #define cases,
+ * would silently shadow the kernel's real values with wrong ones.
+ */
+#ifndef _MPLS_H
 #ifndef RTMPT_IP
 #define RTMPT_IP 0
 #endif
@@ -630,6 +650,7 @@ enum {
 #ifndef RTA_MPLS_PAYLOAD
 #define RTA_MPLS_PAYLOAD 30
 #endif
+#endif /* !_MPLS_H */
 
 #ifndef RTE_LOGTYPE_LPM
 #define RTE_LOGTYPE_LPM RTE_LOGTYPE_USER1
