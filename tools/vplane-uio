@@ -185,7 +185,7 @@ sub iommu_present {
     my $lscpu = `/usr/bin/lscpu`;
 
     # The Xeon D-1518 seems to have poor IOMMU performance
-    # But cannot run igb_uio with Secure Level, so take the hit in that case
+    # But cannot run a UIO driver with Secure Level, so take the hit in that case
     if ($lscpu =~ /Model name: .* D-1518 .*/ &&
             (! -f "/sys/kernel/security/securelevel" ||
             read_value("/sys/kernel/security/securelevel") != "1") &&
@@ -277,7 +277,7 @@ sub get_block_iommu_groups {
 
 my @buses = (
     {
-        driver => 'igb_uio',
+        driver => 'uio_pci_generic',
         type   => 'pci',
         match  => \&pci_match,
     },
@@ -332,7 +332,7 @@ foreach my $bus (@buses) {
             foreach my $group ( keys %groups ) {
                 debug("checking ethernet group $group\n");
                 if ( $block_groups->{$group} ) {
-                    debug("Groups overlap, fall back to uio_igb\n");
+                    debug("Groups overlap, fall back to uio_pci_generic\n");
                     $do_iommu = 0;
                     last;
                 }
@@ -355,8 +355,8 @@ foreach my $bus (@buses) {
             exit(-1);
         }
         else {
-            debug("Using igb_uio\n");
-            my @cmd = ( "modprobe", "-s", "igb_uio" );
+            debug("Using uio_pci_generic\n");
+            my @cmd = ( "modprobe", "-s", "uio_pci_generic" );
             system(@cmd) unless $DEBUG;
         }
         rebind_bus( $bus, $do_iommu, @devices );
