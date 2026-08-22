@@ -20,7 +20,6 @@
 #include "dp_test_lib_internal.h"
 #include "dp_test/dp_test_macros.h"
 #include "util.h"
-#include  "fal_plugin_sw_port.h"
 #include  "dp_test_lib_internal.h"
 
 #define LOG(l, t, ...)						\
@@ -101,8 +100,6 @@ void fal_plugin_setup_interfaces(void)
 			    "Expected EMPTY bridge vlan set");
 
 	bridge_vlan_set_free(set);
-
-	fal_plugin_sw_ports_create();
 }
 
 static const
