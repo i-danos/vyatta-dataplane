@@ -1,3 +1,22 @@
+vyatta-dataplane (3.14.28) unstable; urgency=medium
+
+  * Commit the XFRM policy transaction on the error path as well.
+
+    3.14.27 added the commit after the parse-result check, so a batch that
+    failed partway through returned without publishing what it had already
+    staged -- which is precisely the state that crashes.
+
+    Measured on a three-router IPsec topology: 3.14.27 fixed two of the three
+    routers (0 crashes, links passing traffic), while the third still took 13
+    SIGSEGVs. It was the one whose batch hit "netlink POLICY message parse
+    error", i.e. the early return.
+
+    Committing before the check covers both paths. It is safe on the error path
+    because npf_rte_acl_commit_transaction() rolls the transaction back when the
+    build fails, so num_rules and the built trie stay consistent either way.
+
+ -- i-danos <miwide20190328@gmail.com>  Wed, 26 Aug 2026 17:29:41 +0800
+
 vyatta-dataplane (3.14.27) unstable; urgency=medium
 
   * Commit the rldb transaction on the controller XFRM policy path.
