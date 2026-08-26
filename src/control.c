@@ -376,6 +376,13 @@ static int process_xfrm_policy_cmd(enum cont_src_en cont_src,
 
 	vrfid_t vrf_id = VRF_DEFAULT_ID;
 
+	/*
+	 * Only aux.vrf was being set. rtnl_process_xfrm() reads aux.seq to
+	 * label the ack it sends back, so it was reading whatever the stack
+	 * happened to hold; ack_msg is written before it is read, but zeroing
+	 * the whole struct keeps that from depending on callee order.
+	 */
+	memset(&aux, 0, sizeof(aux));
 	aux.vrf = &vrf_id;
 
 	int rc = mnl_cb_run(data, size, 0, 0, rtnl_process_xfrm,
@@ -384,6 +391,28 @@ static int process_xfrm_policy_cmd(enum cont_src_en cont_src,
 		RTE_LOG(ERR, DATAPLANE, "netlink POLICY message parse error\n");
 		return -1;
 	}
+
+	/*
+	 * Publish the rules just staged. rtnl_process_xfrm() only records them
+	 * in an rldb transaction; the ACL runtime that crypto_policy_check_*()
+	 * classifies against is not built until the transaction is committed.
+	 *
+	 * The subscription path in xfrm_client.c commits when it sees the "END"
+	 * marker that terminates a batch. This path -- policy pushed from a
+	 * controller snapshot -- has no such marker and was never committing at
+	 * all, so m_trie->num_rules went above zero while the trie stayed
+	 * unbuilt. npf_rte_acl_trie_match() gates on num_rules, so it then
+	 * handed an unbuilt context to rte_acl_classify(), which dereferences
+	 * the missing runtime and takes the dataplane down:
+	 *
+	 *   rte_acl_classify_scalar+299   mov (%r8),%ecx   with %r8 == 0
+	 *   npf_rte_acl_trie_match
+	 *   rldb_match
+	 *   crypto_policy_check_outbound
+	 *
+	 * Committing here is a no-op when nothing was staged.
+	 */
+	crypto_npf_cfg_commit_flush();
 
 	return 0;
 }

@@ -1,3 +1,36 @@
+vyatta-dataplane (3.14.27) unstable; urgency=medium
+
+  * Commit the rldb transaction on the controller XFRM policy path.
+
+    Configuring a site-to-site IPsec tunnel crashed the dataplane, repeatedly:
+    566 SIGSEGVs on one router during a single test run, which left both of its
+    dataplane ports dead and every link through it silently black-holing.
+
+    rtnl_process_xfrm() only stages policy rules in an rldb transaction. The ACL
+    runtime that crypto_policy_check_outbound() classifies against is not built
+    until the transaction is committed. xfrm_client.c commits when it sees the
+    "END" marker closing a batch; the controller snapshot path in control.c has
+    no such marker and was not committing at all.
+
+    npf_rte_acl_trie_match() gates only on m_trie->num_rules, so once rules were
+    staged it passed an unbuilt context to rte_acl_classify():
+
+      rte_acl_classify_scalar+299   mov (%r8),%ecx    with %r8 == 0
+      npf_rte_acl_trie_match        npf_rte_acl.c:1484
+      rldb_match
+      crypto_policy_check_outbound
+      shadow_crypto_output
+
+    Committing at the end of process_xfrm_policy_cmd() is a no-op when nothing
+    was staged.
+
+    Also zero the xfrm_client_aux_data before use. Only .vrf was being set, and
+    rtnl_process_xfrm() reads .seq to label the ack it sends back, so that field
+    was whatever the stack held. Unrelated to the crash, but it is the same
+    function.
+
+ -- i-danos <miwide20190328@gmail.com>  Wed, 26 Aug 2026 10:34:20 +0800
+
 vyatta-dataplane (3.14.26) unstable; urgency=medium
 
   * Lower libdpdk-dev dependency from >= 24.11.6 to >= 24.11.4: Debian 13
