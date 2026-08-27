@@ -143,6 +143,16 @@ struct npf_match_ctx_trie {
 	uint16_t              num_rules;
 	uint16_t              flags;
 	enum trie_state       trie_state;
+	/*
+	 * Whether acl_ctx currently holds runtime structures, i.e. whether
+	 * rte_acl_build() has succeeded since the last change to the rule set.
+	 * num_rules cannot answer this: a rule is counted as soon as it is
+	 * added, while the runtime is built later, and rte_acl_classify() on a
+	 * context that was created but never built dereferences a NULL
+	 * trans_table -- "mov (%r8),%ecx" with %r8 == 0 inside
+	 * rte_acl_classify_scalar.
+	 */
+	bool                  acl_built;
 	struct rte_acl_ctx   *acl_ctx;
 	bool                  rules_deleted;
 	struct rcu_head       npr_rcu;
@@ -711,6 +721,7 @@ npf_rte_acl_get_trie(int af, struct npf_match_ctx_trie **m_trie)
 	/* reset trie state for fresh use */
 	(*m_trie)->trie_state = TRIE_STATE_WRITABLE;
 	(*m_trie)->num_rules = 0;
+	(*m_trie)->acl_built = false;
 
 	return 0;
 }
@@ -1190,6 +1201,8 @@ npf_rte_acl_trie_add_rule(int af, struct npf_match_ctx_trie *m_trie,
 	}
 
 	m_trie->num_rules++;
+	/* the runtime no longer reflects the rule set */
+	m_trie->acl_built = false;
 
 	return 0;
 }
@@ -1276,6 +1289,8 @@ static int npf_rte_acl_trie_build(int af, struct npf_match_ctx_trie *m_trie)
 		return err;
 	}
 
+	m_trie->acl_built = true;
+
 	if (m_trie->num_rules >= TRIE_FREEZE_THRESHOLD) {
 
 		DP_DEBUG(RLDB_ACL, DEBUG, DATAPLANE, "Updating trie-state %s from %s to %s (%s)\n",
@@ -1327,8 +1342,10 @@ npf_rte_acl_trie_del_rule(int af, struct npf_match_ctx_trie *m_trie,
 	}
 
 	/* Only reduce counter if there was a matching delete */
-	if (err != -ENOENT)
+	if (err != -ENOENT) {
 		m_trie->num_rules--;
+		m_trie->acl_built = false;
+	}
 
 	return err;
 }
@@ -1469,7 +1486,16 @@ npf_rte_acl_trie_match(int af, struct npf_match_ctx_trie *m_trie,
 	struct rte_mbuf *m = data->mbuf;
 	uint8_t *nlp;
 
-	if (!m_trie->num_rules)
+	/*
+	 * num_rules alone is not enough. It counts rules as they are staged,
+	 * but rte_acl_classify() needs the runtime structures that
+	 * rte_acl_build() produces, and a context that has rules but has not
+	 * been built segfaults inside rte_acl_classify_scalar on a NULL
+	 * trans_table. Treat "rules present, runtime absent" as no match --
+	 * the same answer this returns before any rule is added, and the same
+	 * one the caller already handles.
+	 */
+	if (!m_trie->num_rules || !m_trie->acl_built)
 		return -ENOENT;
 
 	if (af == AF_INET) {
@@ -1930,6 +1956,7 @@ npf_rte_acl_copy_rules(npf_match_ctx_t *ctx,
 	}
 
 	dst_trie->num_rules += m_trie->num_rules;
+	dst_trie->acl_built = false;
 
 	DP_DEBUG(RLDB_ACL, DEBUG, DATAPLANE, "Merge into %s completed (%u rules)\n",
 			dst_trie->trie_name, dst_trie->num_rules);
