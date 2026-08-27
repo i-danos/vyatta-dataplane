@@ -155,6 +155,12 @@ struct npf_match_ctx_trie {
 	bool                  acl_built;
 	struct rte_acl_ctx   *acl_ctx;
 	bool                  rules_deleted;
+	/*
+	 * The address family this trie belongs to. Held here because the RCU
+	 * callback that destroys it only receives an rcu_head, and the destroy
+	 * path needs the family to return a pooled trie to the right pool.
+	 */
+	int                   af;
 	struct rcu_head       npr_rcu;
 };
 
@@ -432,6 +438,18 @@ acl_rule_hash_cmp(const void *key1, const void *key2, size_t key_len __rte_unuse
 
 static int npf_rte_acl_trie_destroy(int af, struct npf_match_ctx_trie *m_trie);
 
+/*
+ * RCU callback for npf_rte_acl_delete_trie(). The family comes from the trie
+ * itself because a callback only receives the rcu_head.
+ */
+static void npf_rte_acl_trie_destroy_rcu(struct rcu_head *head)
+{
+	struct npf_match_ctx_trie *m_trie =
+		caa_container_of(head, struct npf_match_ctx_trie, npr_rcu);
+
+	npf_rte_acl_trie_destroy(m_trie->af, m_trie);
+}
+
 static int npf_rte_acl_destroy_mtrie_pool(int af);
 
 static inline int npf_rte_acl_get_ring(int af, struct rte_ring **ring)
@@ -661,6 +679,7 @@ static int npf_rte_acl_create_trie(int af, int max_rules,
 	snprintf(acl_name, RTE_ACL_NAMESIZE, "%s-%s-%d", pfx1, pfx2,
 		 af == AF_INET ? v4_cnt++ : v6_cnt++);
 
+	tmp_trie->af = af;
 	tmp_trie->trie_name = strdup(acl_name);
 	if (!tmp_trie->trie_name) {
 		RTE_LOG(ERR, DATAPLANE,
@@ -822,9 +841,23 @@ npf_rte_acl_delete_trie(npf_match_ctx_t *ctx, struct npf_match_ctx_trie *m_trie)
 		 "Delete trie %s from ctx %s (Trie count = %d)\n",
 		 m_trie->trie_name, ctx->ctx_name,
 		 rte_atomic16_read(&ctx->num_tries));
-	cds_list_del(&m_trie->trie_link);
-	npf_rte_acl_trie_destroy(ctx->af, m_trie);
+	/*
+	 * Unlink, then destroy only once no forwarding thread can still be
+	 * inside the trie. Destroying it here released the ACL runtime with
+	 * readers holding the pointer: npf_rte_acl_match() walks trie_list and
+	 * a thread that had already passed the acl_built check went on to call
+	 * rte_acl_classify() on a context whose trans_table rte_acl_reset() had
+	 * just freed -- "mov (%r8),%ecx" with %r8 == 0, on dataplane/slow.
+	 *
+	 * The acl_built flag narrowed that window but cannot close it: it is
+	 * checked before the call and the reset happens after. Only a grace
+	 * period can. tap_reader() brackets shadow_output() with
+	 * dp_rcu_thread_online()/offline(), so those readers are exactly what
+	 * call_rcu waits for.
+	 */
+	cds_list_del_rcu(&m_trie->trie_link);
 	rte_atomic16_dec(&ctx->num_tries);
+	call_rcu(&m_trie->npr_rcu, npf_rte_acl_trie_destroy_rcu);
 }
 
 static int npf_rte_acl_get_writable_trie(npf_match_ctx_t *m_ctx,
@@ -1523,7 +1556,7 @@ int npf_rte_acl_match(int af, npf_match_ctx_t *m_ctx,
 		      uint32_t *rule_no)
 {
 	int err;
-	struct cds_list_head *list_entry, *next;
+	struct cds_list_head *list_entry;
 	struct npf_match_ctx_trie *m_trie;
 	uint32_t result, priority = 0, tmp_priority = 0;
 
@@ -1532,7 +1565,15 @@ int npf_rte_acl_match(int af, npf_match_ctx_t *m_ctx,
 
 	DP_DEBUG(RLDB_ACL, DEBUG, DATAPLANE, "Starting match on %s\n", m_ctx->ctx_name);
 
-	cds_list_for_each_safe(list_entry, next, &m_ctx->trie_list) {
+	/*
+	 * The RCU walk pairs with cds_list_del_rcu() in
+	 * npf_rte_acl_delete_trie(): it reads the links with the barriers that
+	 * make an unlink concurrent with this walk safe. The _safe variant
+	 * cached "next" without them, which is the wrong guarantee here -- it
+	 * protects against this loop deleting entries, not against another
+	 * thread doing so.
+	 */
+	cds_list_for_each_rcu(list_entry, &m_ctx->trie_list) {
 		m_trie = cds_list_entry(list_entry, struct npf_match_ctx_trie,
 					trie_link);
 
