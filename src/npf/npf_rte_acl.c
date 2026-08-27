@@ -1652,6 +1652,18 @@ int npf_rte_acl_commit_transaction(int af, npf_match_ctx_t *m_ctx)
 static int
 npf_rte_acl_trie_destroy(int af, struct npf_match_ctx_trie *m_trie)
 {
+	/*
+	 * rte_acl_reset() releases the runtime structures, so the context stops
+	 * being classifiable here -- not when the trie is next taken from the
+	 * pool, which is where num_rules and acl_built were being cleared. A
+	 * trie is RCU-protected and a forwarding thread can still hold a
+	 * reference across this, so clear the flags first: a reader that gets
+	 * here mid-destroy must see "not built" rather than a built flag over a
+	 * reset context.
+	 */
+	m_trie->acl_built = false;
+	m_trie->num_rules = 0;
+
 	if (m_trie->flags & NPF_M_TRIE_FLAG_POOL) {
 		rte_acl_reset(m_trie->acl_ctx);
 		npf_rte_acl_put_trie(af, m_trie);
