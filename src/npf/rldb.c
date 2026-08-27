@@ -876,18 +876,18 @@ void rldb_dump(struct rldb_db_handle *db, json_writer_t *wr)
 /*
  * destroy specified rule database
  */
-int rldb_destroy(struct rldb_db_handle *db)
+/*
+ * The body of rldb_destroy without the rldb_disabled check, for rldb_cleanup()
+ * to use on its own way out: cleanup sets the flag first so that nothing else
+ * can enter, and then still has to destroy what it holds.
+ */
+static int rldb_destroy_internal(struct rldb_db_handle *db)
 {
 	struct cds_lfht_iter iter;
 	struct rldb_rule_handle *rh;
 
 	if (!db)
 		return -EINVAL;
-
-	if (rldb_disabled) {
-		RLDB_ERR("RLDB is not initialized\n");
-		return -ENODEV;
-	}
 
 	if (db->ht) {
 		cds_lfht_for_each_entry(db->ht, &iter, rh, ht_node) {
@@ -902,6 +902,19 @@ int rldb_destroy(struct rldb_db_handle *db)
 	return 0;
 }
 
+int rldb_destroy(struct rldb_db_handle *db)
+{
+	if (!db)
+		return -EINVAL;
+
+	if (rldb_disabled) {
+		RLDB_ERR("RLDB is not initialized\n");
+		return -ENODEV;
+	}
+
+	return rldb_destroy_internal(db);
+}
+
 /*
  * clean up infrastructure set up for rule database
  */
@@ -911,9 +924,22 @@ int rldb_cleanup(void)
 	struct cds_lfht_iter iter;
 	struct rldb_db_handle *db;
 
+	/*
+	 * Close the door before emptying the room, not after. Every other entry
+	 * point in this file refuses once rldb_disabled is set, and that is what
+	 * stops a caller holding a stale handle from following it into freed
+	 * memory. Setting the flag after the loop left the whole teardown open:
+	 * rldb_destroy() frees the handle, and a crypto VRF context being
+	 * released on the RCU thread still holds pointers to the same four
+	 * databases. Its rldb_destroy() then found a non-NULL but dangling db,
+	 * passed both checks, and read db->ht -- a SIGSEGV inside
+	 * cds_lfht_first, on dataplane/rcu, 26 times in one IPsec suite run.
+	 */
+	rldb_disabled = true;
+
 	if (rldb_global_ht) {
 		cds_lfht_for_each_entry(rldb_global_ht, &iter, db, ht_node) {
-			rldb_destroy(db);
+			rldb_destroy_internal(db);
 		}
 
 		cds_lfht_destroy(rldb_global_ht, NULL);
@@ -924,8 +950,6 @@ int rldb_cleanup(void)
 
 	rldb_rh_mempool = NULL;
 	rldb_global_ht = NULL;
-
-	rldb_disabled = true;
 
 	npf_rte_acl_teardown();
 
