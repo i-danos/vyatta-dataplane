@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.31) unstable; urgency=medium
+
+  * rldb: disable the database before tearing it down, not after
+
+ -- i-danos dev <dev@i-danos.dev>  Thu, 27 Aug 2026 23:49:42 +0800
+
 vyatta-dataplane (3.14.30) unstable; urgency=medium
 
   * npf_rte_acl: clear the built flag where the context is reset
