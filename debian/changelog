@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.36) unstable; urgency=medium
+
+  * crypto: drop the private session pool DPDK 22.11 made redundant
+
+ -- i-danos dev <dev@i-danos.dev>  Fri, 28 Aug 2026 13:55:05 +0800
+
 vyatta-dataplane (3.14.35) unstable; urgency=medium
 
   * crypto: size the session pool for DPDK 22.11's merged session model
