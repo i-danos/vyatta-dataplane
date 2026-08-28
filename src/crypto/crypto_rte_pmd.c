@@ -520,26 +520,13 @@ static int crypto_rte_find_inst_id(enum cryptodev_type dev_type,
 	return 0;
 }
 
-static int crypto_rte_setup_priv_pool(enum cryptodev_type dev_type,
-				      unsigned int session_size)
-{
-#define POOL_NAME_LEN 50
-	char pool_name[POOL_NAME_LEN];
-	unsigned int socket = rte_lcore_to_socket_id(rte_get_master_lcore());
-
-	snprintf(pool_name, POOL_NAME_LEN, "crypto_sess_priv_pool_%d",
-		 dev_type);
-	crypto_priv_sess_pools[dev_type] =
-		rte_mempool_create(pool_name, CRYPTO_MAX_SESSIONS, session_size,
-				   0, 0, NULL, NULL, NULL, NULL, socket, 0);
-	if (!crypto_priv_sess_pools[dev_type]) {
-		RTE_LOG(ERR, DATAPLANE,
-			"Could not allocate crypto session private pool for socket %d, dev %s\n",
-			socket, cryptodev_names[dev_type]);
-		return -ENOMEM;
-	}
-	return 0;
-}
+/*
+ * crypto_rte_setup_priv_pool() is gone: DPDK 22.11 folded the per-device
+ * private session data into the session pool, so there is nothing left for a
+ * separate pool to hold. crypto_rte_destroy_priv_pool() stays because its
+ * callers are on teardown paths and it is a no-op on a pool that was never
+ * created.
+ */
 
 static void crypto_rte_destroy_priv_pool(enum cryptodev_type dev_type)
 {
@@ -593,11 +580,21 @@ int crypto_rte_create_pmd(int cpu_socket, uint8_t dev_id,
 	if (err)
 		goto fail;
 
-	if (!crypto_priv_sess_pools[dev_type]) {
-		err = crypto_rte_setup_priv_pool(dev_type, session_size);
-		if (err)
-			goto fail;
-	}
+	/*
+	 * No separate private pool. DPDK 22.11 folded the per-device private
+	 * data into the session pool itself, so crypto_rte_ensure_session_pool()
+	 * above covers it. Creating this one as well merely failed:
+	 * rte_mempool_create() wants CRYPTO_MAX_SESSIONS (256K) elements in one
+	 * contiguous allocation, which does not fit the hugepages available, and
+	 * the device was closed --
+	 *
+	 *   DATAPLANE: Could not allocate crypto session private pool
+	 *   CRYPTODEV: Closing crypto device crypto_aesni_gcm0
+	 *
+	 * with the same end result as the elt_size 0 bug: no crypto device, no
+	 * SA in the dataplane. The session pool avoids that by populating in
+	 * chunks through crypto_rte_sym_pool_grow().
+	 */
 
 	err = rte_cryptodev_configure(*rte_dev_id, &conf);
 	if (err != 0) {
