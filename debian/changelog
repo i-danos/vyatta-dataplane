@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.35) unstable; urgency=medium
+
+  * crypto: size the session pool for DPDK 22.11's merged session model
+
+ -- i-danos dev <dev@i-danos.dev>  Fri, 28 Aug 2026 11:22:11 +0800
+
 vyatta-dataplane (3.14.34) unstable; urgency=medium
 
   * npf_rte_acl: implement rule deletion and trie merge without DPDK help
