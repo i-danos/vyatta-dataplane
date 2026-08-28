@@ -115,16 +115,30 @@ crypto_rte_get_session(struct rte_mempool *pool)
 	return NULL;
 }
 
-int crypto_rte_setup(void)
+/*
+ * Create the session pool on first use, sized for the device that needs it.
+ *
+ * DPDK 22.11 merged the session header and its private data into one pool, so
+ * the element size depends on the PMD and cannot be known until a device has
+ * been probed. With more than one device type the largest private size wins,
+ * which is what rte_cryptodev.h asks for.
+ */
+static int crypto_rte_ensure_session_pool(unsigned int session_size)
 {
-	int err = 0;
-	int socket = rte_lcore_to_socket_id(rte_get_master_lcore());
+	unsigned int socket = rte_lcore_to_socket_id(rte_get_master_lcore());
+	int err;
 
-	/*
-	 * allocate generic session context pool
-	 */
+	if (crypto_session_pool) {
+		if (session_size > crypto_session_pool->elt_size)
+			RTE_LOG(ERR, DATAPLANE,
+				"Crypto session pool element %u too small for device needing %u\n",
+				crypto_session_pool->elt_size, session_size);
+		return 0;
+	}
+
 	crypto_session_pool = rte_cryptodev_sym_session_pool_create(
-		"crypto_session_pool", CRYPTO_MAX_SESSIONS, 0, 0, 0, socket);
+		"crypto_session_pool", CRYPTO_MAX_SESSIONS, session_size,
+		0, 0, socket);
 	if (!crypto_session_pool) {
 		RTE_LOG(ERR, DATAPLANE,
 			"Could not allocate crypto session pool\n");
@@ -140,13 +154,49 @@ int crypto_rte_setup(void)
 		goto fail;
 	}
 
-	/* Initial population */
 	err = crypto_rte_sym_pool_grow(crypto_session_pool);
 	if (err < 0) {
-		RTE_LOG(ERR, DATAPLANE, "Failed initial crypto session pool population: %s\n",
+		RTE_LOG(ERR, DATAPLANE,
+			"Failed initial crypto session pool population: %s\n",
 			rte_strerror(-err));
 		goto fail;
 	}
+
+	return 0;
+
+fail:
+	rte_mempool_free(crypto_session_pool);
+	crypto_session_pool = NULL;
+	return err;
+}
+
+int crypto_rte_setup(void)
+{
+	int err = 0;
+	int socket = rte_lcore_to_socket_id(rte_get_master_lcore());
+
+	/*
+	 * The session pool is created later, by crypto_rte_ensure_session_pool()
+	 * once a device exists and its private session size is known.
+	 *
+	 * It used to be created here with elt_size 0. That was right for DPDK
+	 * 20.11's two-level model, where this pool held only session headers and
+	 * the per-device private data lived in crypto_priv_sess_pools[]. DPDK
+	 * 22.11 merged the two: rte_cryptodev.h now says elt_size "should be the
+	 * size of the cryptodev PMD session private data obtained through
+	 * rte_cryptodev_sym_get_private_session_size()", and with 0 the elements
+	 * are too small. rte_cryptodev_queue_pair_setup() rejected the pool:
+	 *
+	 *   CRYPTODEV: rte_cryptodev_queue_pair_setup(): Invalid mempool
+	 *   DATAPLANE: Failed to set up queue pair 0 for crypto_aesni_gcm0
+	 *   CRYPTODEV: Closing crypto device crypto_aesni_gcm0
+	 *   DATAPLANE: netlink SA message parse error
+	 *
+	 * With no crypto device the dataplane could not take any SA from the
+	 * kernel. strongswan negotiated fine and the kernel had the XFRM state,
+	 * but "vplsh -c 'ipsec sad'" stayed at total-sas 0 and every packet
+	 * through the tunnel was lost.
+	 */
 
 	uint16_t crypto_op_data_size =
 		sizeof(struct rte_crypto_sym_op) +
@@ -538,6 +588,10 @@ int crypto_rte_create_pmd(int cpu_socket, uint8_t dev_id,
 
 	session_size =
 		rte_cryptodev_sym_get_private_session_size(*rte_dev_id);
+
+	err = crypto_rte_ensure_session_pool(session_size);
+	if (err)
+		goto fail;
 
 	if (!crypto_priv_sess_pools[dev_type]) {
 		err = crypto_rte_setup_priv_pool(dev_type, session_size);
