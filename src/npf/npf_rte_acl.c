@@ -1295,7 +1295,8 @@ int npf_rte_acl_add_rule(int af, npf_match_ctx_t *m_ctx, uint32_t rule_no,
 	return 0;
 }
 
-static int npf_rte_acl_trie_build(int af, struct npf_match_ctx_trie *m_trie)
+static int npf_rte_acl_trie_build(int af, struct npf_match_ctx_trie *m_trie,
+				  bool live)
 {
 	struct rte_acl_config cfg = { 0 };
 	int err;
@@ -1310,6 +1311,40 @@ static int npf_rte_acl_trie_build(int af, struct npf_match_ctx_trie *m_trie)
 	} else {
 		cfg.num_fields = RTE_DIM(ipv6_defs);
 		memcpy(cfg.defs, ipv6_defs, sizeof(ipv6_defs));
+	}
+
+	/*
+	 * Take a live trie out of service before rebuilding it.
+	 *
+	 * rte_acl_build() calls acl_build_reset() first, which frees the
+	 * runtime structures and leaves ctx->trans_table NULL until the new
+	 * ones are ready. DANOS used to build against its own DPDK, where
+	 * acl_build_reset() returned early for a context registered with
+	 * rte_acl_rcu_qsbr_add() -- "in-place rebuilds are supported, which
+	 * doesn't allow releasing the current RT structure/memory, which might
+	 * be still used by other threads for classification while the rebuild
+	 * of the new ACL trie is ongoing", as the comment in that fork puts it.
+	 *
+	 * Debian's DPDK has no such API. src/compat.h supplies
+	 * rte_acl_rcu_qsbr_add() as a stub returning 0, so ctx->rcx stays NULL,
+	 * acl_build_reset() runs in full, and a forwarding thread classifying
+	 * against this trie mid-rebuild reaches rte_acl_classify_scalar with a
+	 * NULL trans_table: "mov (%r8),%ecx" with %r8 == 0, on dataplane/slow.
+	 *
+	 * So do the exclusion here: clear acl_built, wait for readers to leave,
+	 * then rebuild. npf_rte_acl_trie_match() skips a trie that is not
+	 * built, which is the same answer it gives before any rule is added.
+	 *
+	 * Only the commit path needs this, and only that path passes live.
+	 * The merge on dp/acl-opt builds tries that are still private to
+	 * npf_rte_acl_optimize_ctx() -- merge_finalize() links them in
+	 * afterwards -- so there is nobody to exclude, and synchronizing there
+	 * would be worse than useless: that thread is RCU-online across the
+	 * whole optimize pass and would wait for itself.
+	 */
+	if (live && m_trie->acl_built) {
+		m_trie->acl_built = false;
+		dp_rcu_synchronize();
 	}
 
 	/* build the runtime structures for added rules, with 2 categories. */
@@ -1352,7 +1387,8 @@ int npf_rte_acl_build(int af, npf_match_ctx_t **m_ctx)
 		if (m_trie->trie_state != TRIE_STATE_WRITABLE)
 			break;
 
-		err = npf_rte_acl_trie_build(af, m_trie);
+		/* on ctx->trie_list: forwarding threads can be inside it */
+		err = npf_rte_acl_trie_build(af, m_trie, true);
 		if (err)
 			return err;
 	}
@@ -2133,7 +2169,8 @@ npf_rte_acl_optimize_merge_build(npf_match_ctx_t *ctx,
 		new_trie = new_tries[i];
 
 		/* build new trie */
-		rc = npf_rte_acl_trie_build(ctx->af, new_trie);
+		/* not linked in until merge_finalize(): no readers yet */
+		rc = npf_rte_acl_trie_build(ctx->af, new_trie, false);
 		if (rc < 0) {
 			RTE_LOG(ERR, DATAPLANE,
 				"Trie-Optimization: Failed build new trie: %s\n",
@@ -2213,7 +2250,8 @@ npf_rte_acl_optimize_merge_rebuild(npf_match_ctx_t *ctx,
 
 		new_trie->flags ^= NPF_M_TRIE_FLAG_REBUILD;
 
-		rc = npf_rte_acl_trie_build(ctx->af, new_trie);
+		/* not linked in until merge_finalize(): no readers yet */
+		rc = npf_rte_acl_trie_build(ctx->af, new_trie, false);
 		if (rc < 0) {
 			RTE_LOG(ERR, DATAPLANE,
 				"Trie-Optimization: Failed rebuild new trie: %s\n",
