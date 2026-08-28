@@ -406,12 +406,19 @@ struct rte_acl_rcu_config {
 static inline int rte_acl_rcu_qsbr_add(struct rte_acl_ctx *ctx __attribute__((unused)), const struct rte_acl_rcu_config *cfg __attribute__((unused))) {
 	return 0;
 }
-static inline int rte_acl_del_rule(struct rte_acl_ctx *ctx __attribute__((unused)), const struct rte_acl_rule *rule __attribute__((unused))) {
-	return 0;
-}
-static inline int rte_acl_copy_rules(struct rte_acl_ctx *dst __attribute__((unused)), struct rte_acl_ctx *src __attribute__((unused))) {
-	return 0;
-}
+/*
+ * rte_acl_del_rule() and rte_acl_copy_rules() used to be stubbed out here,
+ * returning 0 without touching the context. Both are DANOS additions to its own
+ * DPDK and Debian's does not have them, so the stubs made rule deletion and
+ * trie merging report success while doing nothing: a deleted policy or firewall
+ * rule stayed in the ACL context and kept matching, and a merge produced an
+ * empty destination trie.
+ *
+ * npf_rte_acl.c now keeps its own copy of each trie's rules and does both
+ * itself -- deletion by rebuilding the context from what remains, which is the
+ * only way stock DPDK allows a rule to be removed. Nothing should call these
+ * names again, so they are gone rather than left as a stub that compiles.
+ */
 
 #ifndef IFF_META_HDR
 #define IFF_META_HDR 0x0004

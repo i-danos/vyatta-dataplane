@@ -161,7 +161,27 @@ struct npf_match_ctx_trie {
 	 * path needs the family to return a pooled trie to the right pool.
 	 */
 	int                   af;
+	/*
+	 * Our own copy of the rules in this trie.
+	 *
+	 * DPDK offers no way to remove a rule from a context or to copy rules
+	 * between contexts; DANOS carried both as patches to its own DPDK, and
+	 * src/compat.h stubs them out against Debian's. Keeping the rules here
+	 * lets deletion be done the only way stock DPDK allows -- discard the
+	 * context and rebuild it from what is left -- and lets a merge copy
+	 * rules by re-adding them.
+	 */
+	struct cds_list_head  rule_list;
+	bool                  needs_recreate;
 	struct rcu_head       npr_rcu;
+};
+
+/* One stored rule. The buffer is sized for the larger of the two families. */
+struct npf_acl_rule_copy {
+	struct cds_list_head  link;
+	uint32_t              rule_no;
+	size_t                sz;
+	uint8_t               rule[0];
 };
 
 static struct cds_list_head ctx_list;
@@ -452,6 +472,8 @@ static void npf_rte_acl_trie_destroy_rcu(struct rcu_head *head)
 
 static int npf_rte_acl_destroy_mtrie_pool(int af);
 
+static void npf_rte_acl_free_rule_copies(struct npf_match_ctx_trie *m_trie);
+
 static inline int npf_rte_acl_get_ring(int af, struct rte_ring **ring)
 {
 	if (af == AF_INET)
@@ -680,6 +702,8 @@ static int npf_rte_acl_create_trie(int af, int max_rules,
 		 af == AF_INET ? v4_cnt++ : v6_cnt++);
 
 	tmp_trie->af = af;
+	CDS_INIT_LIST_HEAD(&tmp_trie->rule_list);
+	tmp_trie->needs_recreate = false;
 	tmp_trie->trie_name = strdup(acl_name);
 	if (!tmp_trie->trie_name) {
 		RTE_LOG(ERR, DATAPLANE,
@@ -741,6 +765,8 @@ npf_rte_acl_get_trie(int af, struct npf_match_ctx_trie **m_trie)
 	(*m_trie)->trie_state = TRIE_STATE_WRITABLE;
 	(*m_trie)->num_rules = 0;
 	(*m_trie)->acl_built = false;
+	(*m_trie)->needs_recreate = false;
+	npf_rte_acl_free_rule_copies(*m_trie);
 
 	return 0;
 }
@@ -1193,6 +1219,58 @@ static void npf_rte_acl_add_v6_rule(uint8_t *match_addr, uint8_t *mask,
 		*(uint16_t *)&mask[NPC_GPR_DPORT_OFF_v6];
 }
 
+/*
+ * Rule bookkeeping.
+ *
+ * These exist because Debian's DPDK has neither rte_acl_del_rule() nor
+ * rte_acl_copy_rules() -- see the struct comment. A trie keeps a copy of every
+ * rule it holds so that a deletion can be honoured by rebuilding the context
+ * from what remains, which is the only way stock DPDK allows a rule to be
+ * removed.
+ */
+static void npf_rte_acl_free_rule_copies(struct npf_match_ctx_trie *m_trie)
+{
+	struct npf_acl_rule_copy *rc, *tmp;
+
+	if (!m_trie->rule_list.next)
+		return;
+
+	cds_list_for_each_entry_safe(rc, tmp, &m_trie->rule_list, link) {
+		cds_list_del(&rc->link);
+		free(rc);
+	}
+}
+
+static int npf_rte_acl_store_rule(struct npf_match_ctx_trie *m_trie,
+				  const struct rte_acl_rule *acl_rule,
+				  size_t rule_sz)
+{
+	struct npf_acl_rule_copy *rc;
+
+	rc = malloc(sizeof(*rc) + rule_sz);
+	if (!rc)
+		return -ENOMEM;
+
+	rc->rule_no = acl_rule->data.userdata;
+	rc->sz = rule_sz;
+	memcpy(rc->rule, acl_rule, rule_sz);
+	cds_list_add_tail(&rc->link, &m_trie->rule_list);
+
+	return 0;
+}
+
+static struct npf_acl_rule_copy *
+npf_rte_acl_find_rule(struct npf_match_ctx_trie *m_trie, uint32_t rule_no)
+{
+	struct npf_acl_rule_copy *rc;
+
+	cds_list_for_each_entry(rc, &m_trie->rule_list, link)
+		if (rc->rule_no == rule_no)
+			return rc;
+
+	return NULL;
+}
+
 static int
 npf_rte_acl_trie_add_rule(int af, struct npf_match_ctx_trie *m_trie,
 			  const struct rte_acl_rule *acl_rule)
@@ -1230,6 +1308,16 @@ npf_rte_acl_trie_add_rule(int af, struct npf_match_ctx_trie *m_trie,
 		rte_mempool_dump(stdout, rule_mempool);
 		rte_acl_dump(m_trie->acl_ctx);
 
+		return err;
+	}
+
+	err = npf_rte_acl_store_rule(m_trie, acl_rule,
+				     af == AF_INET ? sizeof(struct acl4_rules)
+						   : sizeof(struct acl6_rules));
+	if (err < 0) {
+		RTE_LOG(ERR, DATAPLANE,
+			"Could not record rule for trie %s: %s\n",
+			m_trie->trie_name, rte_strerror(-err));
 		return err;
 	}
 
@@ -1295,6 +1383,50 @@ int npf_rte_acl_add_rule(int af, npf_match_ctx_t *m_ctx, uint32_t rule_no,
 	return 0;
 }
 
+/*
+ * Discard the ACL context and build a new one holding only the rules still in
+ * rule_list. This is how a deletion is honoured: stock DPDK has no
+ * rte_acl_del_rule(), so the rule set can only shrink by starting over.
+ *
+ * The caller has already excluded readers when the trie is live.
+ */
+static int npf_rte_acl_recreate_ctx(int af, struct npf_match_ctx_trie *m_trie)
+{
+	struct rte_acl_param acl_param = {
+		.socket_id = SOCKET_ID_ANY,
+		.max_rule_num = NPR_MTRIE_MAX_RULES,
+		.name = m_trie->trie_name,
+	};
+	struct npf_acl_rule_copy *rc;
+	struct rte_acl_ctx *ctx;
+	int err;
+
+	if (af == AF_INET)
+		acl_param.rule_size = RTE_ACL_RULE_SZ(RTE_DIM(ipv4_defs));
+	else if (af == AF_INET6)
+		acl_param.rule_size = RTE_ACL_RULE_SZ(RTE_DIM(ipv6_defs));
+	else
+		return -EINVAL;
+
+	ctx = rte_acl_create(&acl_param);
+	if (!ctx)
+		return -rte_errno;
+
+	cds_list_for_each_entry(rc, &m_trie->rule_list, link) {
+		err = rte_acl_add_rules(ctx,
+					(const struct rte_acl_rule *)rc->rule, 1);
+		if (err < 0) {
+			rte_acl_free(ctx);
+			return err;
+		}
+	}
+
+	rte_acl_free(m_trie->acl_ctx);
+	m_trie->acl_ctx = ctx;
+
+	return 0;
+}
+
 static int npf_rte_acl_trie_build(int af, struct npf_match_ctx_trie *m_trie,
 				  bool live)
 {
@@ -1342,9 +1474,26 @@ static int npf_rte_acl_trie_build(int af, struct npf_match_ctx_trie *m_trie,
 	 * would be worse than useless: that thread is RCU-online across the
 	 * whole optimize pass and would wait for itself.
 	 */
-	if (live && m_trie->acl_built) {
+	if (live && (m_trie->acl_built || m_trie->needs_recreate)) {
 		m_trie->acl_built = false;
 		dp_rcu_synchronize();
+	}
+
+	/*
+	 * A deletion has to be honoured by rebuilding: stock DPDK cannot remove
+	 * a rule from a context. Free the context and add back what is left.
+	 * Readers were excluded just above, and a trie that is not live has
+	 * none.
+	 */
+	if (m_trie->needs_recreate) {
+		err = npf_rte_acl_recreate_ctx(af, m_trie);
+		if (err < 0) {
+			RTE_LOG(ERR, DATAPLANE,
+				"Could not rebuild ACL context for %s : %s\n",
+				m_trie->trie_name, rte_strerror(-err));
+			return err;
+		}
+		m_trie->needs_recreate = false;
 	}
 
 	/* build the runtime structures for added rules, with 2 categories. */
@@ -1397,26 +1546,43 @@ int npf_rte_acl_build(int af, npf_match_ctx_t **m_ctx)
 }
 
 static int
-npf_rte_acl_trie_del_rule(int af, struct npf_match_ctx_trie *m_trie,
+npf_rte_acl_trie_del_rule(int af __rte_unused,
+			  struct npf_match_ctx_trie *m_trie,
 			  const struct rte_acl_rule *acl_rule)
 {
-	int err = 0;
+	struct npf_acl_rule_copy *rc;
 
-	err = rte_acl_del_rule(m_trie->acl_ctx, acl_rule);
+	/*
+	 * This used to call rte_acl_del_rule(), which src/compat.h stubbed out
+	 * against Debian's DPDK: it returned 0 without touching the context.
+	 * That broke the function's contract in both directions. The caller
+	 * relies on -ENOENT to mean "this trie does not hold the rule", and got
+	 * 0 from the first trie it tried, so it decremented num_rules there --
+	 * whether or not the rule was in it -- and stopped looking. Meanwhile
+	 * the rule stayed in the DPDK context and kept matching, so a deleted
+	 * policy or firewall rule went on being applied.
+	 *
+	 * Answer from our own copy of the rule set instead, and mark the trie
+	 * for a rebuild: stock DPDK cannot remove a rule from a context, so the
+	 * context has to be discarded and built again from what is left. That
+	 * happens in npf_rte_acl_trie_build(), under the reader exclusion it
+	 * already does.
+	 */
+	if (!m_trie->rule_list.next)
+		return -ENOENT;
 
-	if (err && err != -ENOENT) {
-		RTE_LOG(ERR, DATAPLANE,
-			"Could not remove rule for af %d : %d\n", af, err);
-		return err;
-	}
+	rc = npf_rte_acl_find_rule(m_trie, acl_rule->data.userdata);
+	if (!rc)
+		return -ENOENT;
 
-	/* Only reduce counter if there was a matching delete */
-	if (err != -ENOENT) {
-		m_trie->num_rules--;
-		m_trie->acl_built = false;
-	}
+	cds_list_del(&rc->link);
+	free(rc);
 
-	return err;
+	m_trie->num_rules--;
+	m_trie->acl_built = false;
+	m_trie->needs_recreate = true;
+
+	return 0;
 }
 
 static int
@@ -1741,6 +1907,8 @@ npf_rte_acl_trie_destroy(int af, struct npf_match_ctx_trie *m_trie)
 	m_trie->acl_built = false;
 	m_trie->num_rules = 0;
 
+	npf_rte_acl_free_rule_copies(m_trie);
+
 	if (m_trie->flags & NPF_M_TRIE_FLAG_POOL) {
 		rte_acl_reset(m_trie->acl_ctx);
 		npf_rte_acl_put_trie(af, m_trie);
@@ -1999,6 +2167,7 @@ npf_rte_acl_copy_rules(npf_match_ctx_t *ctx,
 {
 	int rc;
 	struct rte_mempool *rule_mempool;
+	struct npf_acl_rule_copy *rule_copy;
 
 	if (!ctx || !m_trie || !dst_trie)
 		return -EINVAL;
@@ -2035,13 +2204,30 @@ npf_rte_acl_copy_rules(npf_match_ctx_t *ctx,
 		}
 	}
 
-	rc = rte_acl_copy_rules(dst_trie->acl_ctx, m_trie->acl_ctx);
-	if (rc < 0) {
-		RTE_LOG(ERR, DATAPLANE,
-			"Could not copy rules (%u) into new trie %s (%u): %s\n",
-			m_trie->num_rules, dst_trie->trie_name,
-			dst_trie->num_rules, rte_strerror(-rc));
-		return  rc;
+	/*
+	 * rte_acl_copy_rules() is another stub against Debian's DPDK, so the
+	 * merge produced an empty destination trie and reported success. Copy
+	 * through our own rule list instead: re-add each rule to the
+	 * destination context and record it there too, so the destination can
+	 * later be rebuilt on a deletion like any other trie.
+	 */
+	cds_list_for_each_entry(rule_copy, &m_trie->rule_list, link) {
+		rc = rte_acl_add_rules(dst_trie->acl_ctx,
+				       (const struct rte_acl_rule *)
+				       rule_copy->rule, 1);
+		if (rc < 0) {
+			RTE_LOG(ERR, DATAPLANE,
+				"Could not copy rules (%u) into new trie %s (%u): %s\n",
+				m_trie->num_rules, dst_trie->trie_name,
+				dst_trie->num_rules, rte_strerror(-rc));
+			return rc;
+		}
+
+		rc = npf_rte_acl_store_rule(dst_trie,
+					    (const struct rte_acl_rule *)
+					    rule_copy->rule, rule_copy->sz);
+		if (rc < 0)
+			return rc;
 	}
 
 	dst_trie->num_rules += m_trie->num_rules;
