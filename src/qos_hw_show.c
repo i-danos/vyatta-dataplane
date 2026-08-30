@@ -344,7 +344,7 @@ void qos_hw_show_to_tc_map_list(uint8_t map_type __unused,
 			DP_DEBUG(QOS, ERR, DATAPLANE,
 				 "map-list not in order\n");
 
-		bmi = (map->value.dp * RTE_SCHED_QUEUES_PER_PIPE) +
+		bmi = (map->value.dp * QOS_QUEUES_PER_PIPE) +
 			(map->value.des * RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS);
 
 		cp_bitmap[bmi] |= (1ul << key);
@@ -352,7 +352,7 @@ void qos_hw_show_to_tc_map_list(uint8_t map_type __unused,
 
 	for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; tc++) {
 		for (dp = 0; dp <= QOS_MAX_DROP_PRECEDENCE; dp++) {
-			bmi = (dp * RTE_SCHED_QUEUES_PER_PIPE) +
+			bmi = (dp * QOS_QUEUES_PER_PIPE) +
 				(tc *
 				 RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS);
 

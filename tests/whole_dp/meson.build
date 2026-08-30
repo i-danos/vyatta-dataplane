@@ -285,7 +285,14 @@ cores_available = run_command('nproc').stdout().to_int()
 # and the suite asserts on an interface that no longer exists by design. It is
 # left in check_tests so it keeps compiling: if it ever stops, that is worth
 # knowing, and restoring the feature should restore the test with it.
-suites_not_run = ['dp_test_switch.c']
+suites_not_run = [
+        'dp_test_switch.c',
+        # Both drive switch ports too: qos_class checks QoS on dp1sw_port_N_M
+        # and qos_fal the FAL offload behind them. Neither has anything to do
+        # with the software scheduler.
+        'dp_test_qos_class.c',
+        'dp_test_qos_fal.c',
+]
 
 foreach suite : check_tests + ['dp_test_pipeline.c']
         if suite in suites_not_run

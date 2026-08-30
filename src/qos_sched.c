@@ -1019,7 +1019,7 @@ struct sched_info *qos_sched_new(struct ifnet *ifp,
 	if (!qinfo->queue_map)
 		goto nomem1;
 
-	queues = RTE_SCHED_QUEUES_PER_PIPE * pipes * subports;
+	queues = QOS_QUEUES_PER_PIPE * pipes * subports;
 	qinfo->queue_stats = calloc(queues, sizeof(struct queue_stats));
 	if (!qinfo->queue_stats)
 		goto nomem1;
@@ -1072,7 +1072,7 @@ struct sched_info *qos_sched_new(struct ifnet *ifp,
 		 * never held.
 		 */
 		pp->shaper.tc_ov_weight = 1;
-		for (j = 0; j < RTE_SCHED_QUEUES_PER_PIPE; j++)
+		for (j = 0; j < QOS_QUEUES_PER_PIPE; j++)
 			pp->wrr_weights[j] = 1;
 
 		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++) {
@@ -1346,7 +1346,7 @@ static void qos_show_pipe_config(json_writer_t *wr,
 
 	jsonw_name(wr, "wrr_weights");
 	jsonw_start_array(wr);
-	for (i = 0; i < RTE_SCHED_QUEUES_PER_PIPE; i++)
+	for (i = 0; i < QOS_QUEUES_PER_PIPE; i++)
 		jsonw_uint(wr, p->wrr_weights[i]);
 
 	jsonw_end_array(wr);
@@ -3110,7 +3110,7 @@ static int cmd_qos_profile_queue(struct sched_info *qinfo, unsigned int profile,
 		struct queue_map *qmap = &qinfo->queue_map[profile];
 
 		qindex = q_from_mask(value);
-		if (qindex >= RTE_SCHED_QUEUES_PER_PIPE) {
+		if (qindex >= QOS_QUEUES_PER_PIPE) {
 			DP_DEBUG(QOS, ERR, DATAPLANE,
 				 "q mask 0x%x out of range\n", value);
 			return -EINVAL;
@@ -3122,7 +3122,7 @@ static int cmd_qos_profile_queue(struct sched_info *qinfo, unsigned int profile,
 		pipe->wrr_weights[qindex] = weight;
 
 		if (argc < 5 || (get_unsigned(argv[4], &conf_id) < 0) ||
-		    conf_id >= RTE_SCHED_QUEUES_PER_PIPE) {
+		    conf_id >= QOS_QUEUES_PER_PIPE) {
 			DP_DEBUG(QOS, ERR, DATAPLANE, "bad q config id\n");
 			return -EINVAL;
 		}

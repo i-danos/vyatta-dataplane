@@ -195,7 +195,7 @@ struct queue_map {
 		local_priority:1, /* Local priority queue enabled */
 		designation:1,
 		unused:4;
-	uint8_t conf_ids[RTE_SCHED_QUEUES_PER_PIPE]; /* The configured Q ids */
+	uint8_t conf_ids[QOS_QUEUES_PER_PIPE]; /* The configured Q ids */
 	struct qos_dscp_map *dscp_maps;
 	uint64_t reset_mask;
 };
@@ -264,7 +264,7 @@ struct qos_red_pipe_params {
 
 struct qos_pipe_params {
 	struct qos_shaper_conf	shaper;
-	uint8_t		wrr_weights[RTE_SCHED_QUEUES_PER_PIPE];
+	uint8_t		wrr_weights[QOS_QUEUES_PER_PIPE];
 	uint8_t		designation[INGRESS_DESIGNATORS];
 	uint8_t		des_set;
 	SLIST_HEAD(red_head, qos_red_pipe_params) red_head;
