@@ -274,7 +274,23 @@ endif
 lcore_number = 0
 cores_available = run_command('nproc').stdout().to_int()
 
+# Compiled, but not run. dp_test_switch.c drives switch ports (dp1sw_port_N_M),
+# and switch-vendor support was dropped for 2608 along with the swport plumbing
+# and the vendor FAL plugins -- commit 8c78021a removed fal_plugin_sw_port.c,
+# and ce4f3932 removed the fal_plugin_sw_ports_create() call in the test plugin
+# that used to create these ports. The dataplane now says
+#
+#     DPDK port not known for interface dp1sw_port_0_0, not creating
+#
+# and the suite asserts on an interface that no longer exists by design. It is
+# left in check_tests so it keeps compiling: if it ever stops, that is worth
+# knowing, and restoring the feature should restore the test with it.
+suites_not_run = ['dp_test_switch.c']
+
 foreach suite : check_tests + ['dp_test_pipeline.c']
+        if suite in suites_not_run
+                continue
+        endif
 
         suite_env = ['CK_RUN_SUITE=@0@'.format(suite), 'CK_XML_LOG_FILE_NAME=test_@0@.xml'.format(suite)] + dataplane_test_env
 
