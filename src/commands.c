@@ -370,7 +370,8 @@ static void show_ip6stat(json_writer_t *wr, struct vrf *vrf)
 	jsonw_name(wr, "ip6");
 	jsonw_start_object(wr);
 	for (i = 1; i < ARRAY_SIZE(ipstat_mib_names); i++)
-		jsonw_uint_field(wr, ipstat_mib_names[i], sum[i]);
+		if (ipstat_mib_names[i])
+			jsonw_uint_field(wr, ipstat_mib_names[i], sum[i]);
 	jsonw_end_object(wr);
 }
 
@@ -389,7 +390,8 @@ static void show_icmp6stat(json_writer_t *wr, struct vrf *vrf)
 	jsonw_name(wr, "icmp6");
 	jsonw_start_object(wr);
 	for (i = 1; i < ARRAY_SIZE(icmp6stat_mib_names); i++)
-		jsonw_uint_field(wr, icmp6stat_mib_names[i],
+		if (icmp6stat_mib_names[i])
+			jsonw_uint_field(wr, icmp6stat_mib_names[i],
 				 vrf->v_icmp6stats[i]);
 
 	/* TODO: per-device statistics */
