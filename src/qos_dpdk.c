@@ -277,6 +277,28 @@ int qos_dpdk_queue_read_stats(struct sched_info *qinfo,
 	int ret;
 
 	/*
+	 * Several DANOS queues share one DPDK queue once the geometry is
+	 * folded, and rte_sched_queue_read_stats64() clears what it returns.
+	 * Reading from every one of them would hand the counts to whichever
+	 * happened to be enumerated first and leave the rest at zero -- true,
+	 * but true by accident, and it would change if the enumeration order
+	 * ever did.
+	 *
+	 * Attribute the shared counts to the lowest DANOS queue of each group
+	 * and report the others as empty without reading, so nothing consumes
+	 * counts that belong to a queue it is not reporting. Those queues
+	 * genuinely have no separate existence in the scheduler; see the
+	 * mapping note above.
+	 */
+	if (tc >= QOS_DANOS_TC_BE &&
+	    (q % (RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS /
+		  RTE_SCHED_BE_QUEUES_PER_PIPE)) != 0) {
+		*qlen = 0;
+		*qlen_in_pkts = true;
+		return 0;
+	}
+
+	/*
 	 * The DPDK always measures queue length in the number of packets.
 	 */
 	*qlen_in_pkts = true;
@@ -528,8 +550,21 @@ qos_dpdk_build_pipe_profiles(struct qos_port_params *qos_params)
 		 * so copying the whole DANOS array wrote twelve bytes past
 		 * the end of the DPDK structure.
 		 */
-		for (j = 0; j < RTE_SCHED_BE_QUEUES_PER_PIPE; j++)
-			to->wrr_weights[j] = from->wrr_weights[j];
+		/*
+		 * DPDK's WRR weights belong to the best-effort class, so take
+		 * them from DANOS's best-effort queues -- indices QMAP(TC_BE,
+		 * n) -- rather than from the start of the array, which is
+		 * class 0. Two DANOS queues fold onto each DPDK one, and the
+		 * lower of the pair supplies the weight, matching how the
+		 * statistics are attributed.
+		 */
+		for (j = 0; j < RTE_SCHED_BE_QUEUES_PER_PIPE; j++) {
+			unsigned int dq = j * (RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS
+					       / RTE_SCHED_BE_QUEUES_PER_PIPE);
+
+			to->wrr_weights[j] =
+				from->wrr_weights[QMAP(QOS_DANOS_TC_BE, dq)];
+		}
 		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++)
 			to->tc_rate[j] = 0;
 		for (j = 0; j <= QOS_DANOS_TC_BE; j++)
