@@ -1408,6 +1408,27 @@ static int npf_rte_acl_recreate_ctx(int af, struct npf_match_ctx_trie *m_trie)
 	else
 		return -EINVAL;
 
+	/*
+	 * Free the old context before creating the replacement, not after.
+	 * Two things go wrong the other way round, and both of them bite:
+	 *
+	 * rte_acl_create() returns the *existing* context when one is already
+	 * registered under the same name rather than creating a second one.
+	 * Creating first therefore hands back the very context being replaced,
+	 * the rules below are appended to it, and the deleted rule survives --
+	 * which is the whole thing this function exists to prevent.
+	 *
+	 * And holding both contexts at once needs twice the memory. Each is
+	 * sized for NPR_MTRIE_MAX_RULES regardless of how many rules are
+	 * actually in it, so the peak is large; under whole_dp it is more than
+	 * there is, and rte_acl_create() fails with ENOMEM.
+	 *
+	 * The caller has already excluded readers with a grace period, and a
+	 * trie that is not live has none, so there is nobody to strand.
+	 */
+	rte_acl_free(m_trie->acl_ctx);
+	m_trie->acl_ctx = NULL;
+
 	ctx = rte_acl_create(&acl_param);
 	if (!ctx)
 		return -rte_errno;
@@ -1421,7 +1442,6 @@ static int npf_rte_acl_recreate_ctx(int af, struct npf_match_ctx_trie *m_trie)
 		}
 	}
 
-	rte_acl_free(m_trie->acl_ctx);
 	m_trie->acl_ctx = ctx;
 
 	return 0;
