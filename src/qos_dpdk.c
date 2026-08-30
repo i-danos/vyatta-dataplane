@@ -177,13 +177,22 @@ int qos_dpdk_subport_read_stats(struct sched_info *qinfo,
 	rte_spinlock_lock(&qinfo->stats_lock);
 	ret = rte_sched_subport_read_stats64(port, subport, &stats, over);
 	if (ret == 0) {
-		for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++) {
-			queue_stats->n_pkts_tc[i] += stats.n_pkts_tc[i];
-			queue_stats->n_bytes_tc[i] += stats.n_bytes_tc[i];
+		/*
+		 * DPDK indexes these by its own traffic class, so best effort
+		 * lands at RTE_SCHED_TRAFFIC_CLASS_BE while DANOS looks for
+		 * its last class at index 3. Fold each DPDK class back onto
+		 * the DANOS one it came from; the classes in between are not
+		 * used and contribute nothing.
+		 */
+		for (i = 0; i <= (int)QOS_DANOS_TC_BE; i++) {
+			uint32_t d = qos_dpdk_tc_index(i);
+
+			queue_stats->n_pkts_tc[i] += stats.n_pkts_tc[d];
+			queue_stats->n_bytes_tc[i] += stats.n_bytes_tc[d];
 			queue_stats->n_pkts_tc_dropped[i] +=
-				stats.n_pkts_tc_dropped[i];
+				stats.n_pkts_tc_dropped[d];
 			queue_stats->n_pkts_cman_dropped[i] +=
-				stats.n_pkts_cman_dropped[i];
+				stats.n_pkts_cman_dropped[d];
 		}
 	}
 	rte_spinlock_unlock(&qinfo->stats_lock);
