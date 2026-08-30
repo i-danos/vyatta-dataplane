@@ -438,8 +438,15 @@ static inline int rte_acl_rcu_qsbr_add(struct rte_acl_ctx *ctx __attribute__((un
  * names again, so they are gone rather than left as a stub that compiles.
  */
 
+/*
+ * DANOS's own tun flag, from the linux-vyatta patch to linux/if_tun.h
+ * (if_tun.h line 75, marked "Vyatta"). The fallback below is only
+ * reached when building against unpatched kernel headers, where the value
+ * cannot work anyway -- but it must still be the real one, because a wrong
+ * value here compiles and then asks TUNSETIFF for a different flag.
+ */
 #ifndef IFF_META_HDR
-#define IFF_META_HDR 0x0004
+#define IFF_META_HDR 0x0080
 #endif
 
 #ifndef rte_crypto_aead_algorithm_strings
@@ -648,13 +655,13 @@ static const char * const rte_crypto_auth_algorithm_strings[] __attribute__((unu
  */
 #ifndef _MPLS_H
 #ifndef RTMPT_IP
-#define RTMPT_IP 0
+#define RTMPT_IP 0x0000
 #endif
 #ifndef RTMPT_IPV4
-#define RTMPT_IPV4 1
+#define RTMPT_IPV4 0x0004
 #endif
 #ifndef RTMPT_IPV6
-#define RTMPT_IPV6 2
+#define RTMPT_IPV6 0x0006
 #endif
 
 #ifndef RTMPA_TYPE
@@ -670,7 +677,7 @@ enum {
 #define RTMPNF_BOS_ONLY 1
 #endif
 #ifndef RTA_MPLS_PAYLOAD
-#define RTA_MPLS_PAYLOAD 30
+#define RTA_MPLS_PAYLOAD 33
 #endif
 #endif /* !_MPLS_H */
 
