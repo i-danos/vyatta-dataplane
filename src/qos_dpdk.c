@@ -57,6 +57,66 @@ uint64_t qos_dpdk_check_rate(uint64_t rate, uint64_t parent_bw)
  * Return the DSCP wred resource group name associated with a map entry
  * in a queue index.
  */
+/*
+ * DANOS keeps four traffic classes and gives each of them
+ * RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS queues. DPDK 21.05 onwards has a
+ * different shape: RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE classes, of which all
+ * but the last hold exactly one queue, and the last -- best effort,
+ * RTE_SCHED_TRAFFIC_CLASS_BE -- holds RTE_SCHED_BE_QUEUES_PER_PIPE WRR
+ * queues. With the values DPDK 24.11 ships that is thirteen classes over
+ * sixteen queue slots per pipe, against DANOS's four over sixteen.
+ *
+ * Map DANOS's first three classes straight through and its last onto best
+ * effort, which is where its WRR queues belong. Only these helpers speak
+ * DPDK's numbering: qmap_to_tc()/qmap_to_wrr() and qos_sched_calc_qindex()
+ * keep DANOS's, because the hardware offload path in qos_hw.c and the
+ * per-queue statistics array are indexed with it.
+ */
+#define QOS_DANOS_TC_BE RTE_SCHED_TC_MASK	/* DANOS's last class, 3 */
+
+static inline uint32_t qos_dpdk_tc(uint8_t q)
+{
+	uint8_t tc = qmap_to_tc(q);
+
+	return tc < QOS_DANOS_TC_BE ? tc : RTE_SCHED_TRAFFIC_CLASS_BE;
+}
+
+/*
+ * DANOS class index to DPDK's. Everything indexed by traffic class -- queue
+ * sizes, TC rates in both the subport and the pipe profile -- has to go
+ * through this, and consistently: DPDK requires tc_rate[i] to be non-zero
+ * exactly when qsize[i] is, and rejects the profile otherwise.
+ */
+static inline uint32_t qos_dpdk_tc_index(uint32_t danos_tc)
+{
+	return danos_tc < QOS_DANOS_TC_BE ?
+		danos_tc : RTE_SCHED_TRAFFIC_CLASS_BE;
+}
+
+static inline uint32_t qos_dpdk_wrr(uint8_t q)
+{
+	/* Every class but best effort has a single queue. */
+	return qmap_to_tc(q) < QOS_DANOS_TC_BE ? 0 : qmap_to_wrr(q);
+}
+
+/*
+ * The queue index DPDK addresses, which is not the one DANOS uses for its own
+ * arrays: DPDK reserves RTE_SCHED_QUEUES_PER_PIPE slots per pipe and places a
+ * class at a fixed offset within them, rather than giving every class the same
+ * number of queues.
+ */
+static inline uint32_t qos_dpdk_qindex(struct sched_info *qinfo,
+				       uint32_t subport, uint32_t pipe,
+				       uint32_t tc, uint32_t q)
+{
+	uint32_t dtc = tc < QOS_DANOS_TC_BE ? tc : RTE_SCHED_TRAFFIC_CLASS_BE;
+	uint32_t off = dtc < RTE_SCHED_TRAFFIC_CLASS_BE ?
+		dtc : RTE_SCHED_TRAFFIC_CLASS_BE + q;
+
+	return (subport * qinfo->port_params.n_pipes_per_subport + pipe) *
+		RTE_SCHED_QUEUES_PER_PIPE + off;
+}
+
 static char *qos_get_dscp_grp(struct sched_info *qinfo, uint32_t qid, int i)
 {
 	struct qos_pipe_params *pp;
@@ -83,7 +143,7 @@ void qos_dpdk_dscp_resgrp_json(struct sched_info *qinfo, uint32_t subport,
 	uint32_t qid;
 	int i, num_maps;
 
-	qid = qos_sched_calc_qindex(qinfo, subport, pipe, tc, q);
+	qid = qos_dpdk_qindex(qinfo, subport, pipe, tc, q);
 
 	num_maps = rte_red_queue_num_maps(qinfo->dev_info.dpdk.port, qid);
 	if (num_maps) {
@@ -168,6 +228,7 @@ int qos_dpdk_subport_clear_stats(struct sched_info *qinfo, uint32_t subport)
 	return 0;
 }
 
+
 int qos_dpdk_queue_read_stats(struct sched_info *qinfo,
 			      uint32_t subport, uint32_t pipe,
 			      uint32_t tc, uint32_t q,
@@ -176,7 +237,7 @@ int qos_dpdk_queue_read_stats(struct sched_info *qinfo,
 {
 	struct rte_sched_queue_stats64 stats;
 	struct rte_sched_port *port = qinfo->dev_info.dpdk.port;
-	uint32_t qid = qos_sched_calc_qindex(qinfo, subport, pipe, tc, q);
+	uint32_t qid = qos_dpdk_qindex(qinfo, subport, pipe, tc, q);
 	uint16_t qlen_16;
 	int ret;
 
@@ -435,7 +496,10 @@ qos_dpdk_build_pipe_profiles(struct qos_port_params *qos_params)
 		for (j = 0; j < RTE_SCHED_BE_QUEUES_PER_PIPE; j++)
 			to->wrr_weights[j] = from->wrr_weights[j];
 		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++)
-			to->tc_rate[j] = from->shaper.tc_rate[j];
+			to->tc_rate[j] = 0;
+		for (j = 0; j <= QOS_DANOS_TC_BE; j++)
+			to->tc_rate[qos_dpdk_tc_index(j)] =
+				from->shaper.tc_rate[j];
 	}
 	return profiles;
 }
@@ -474,6 +538,14 @@ static int qos_dpdk_setup_params(struct ifnet *ifp, struct sched_info *qinfo,
 		to->tb_rate = from->tb_rate;
 		to->tb_size = from->tb_size;
 		to->tc_period = from->tc_period;
+		/*
+		 * Straight copy, no class remapping. DPDK checks a subport
+		 * profile differently from a pipe profile: every tc_rate must
+		 * be non-zero here, whereas in a pipe profile it must be
+		 * non-zero exactly where qsize is. DANOS fills all
+		 * RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE entries, so this
+		 * satisfies it.
+		 */
 		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++)
 			to->tc_rate[j] = from->tc_rate[j];
 	}
@@ -604,8 +676,23 @@ int qos_dpdk_start(struct ifnet *ifp, struct sched_info *qinfo,
 		 */
 		dpdk_params.n_pipes_per_subport_enabled =
 			qinfo->port_params.n_pipes_per_subport;
+
+		/*
+		 * Queue sizes are indexed by DPDK's class number, so DANOS's
+		 * last class has to be written at RTE_SCHED_TRAFFIC_CLASS_BE
+		 * and not at its own index. Everything else stays zero, which
+		 * is how DPDK marks a class as unused.
+		 *
+		 * Writing it at DANOS's index left the best-effort class with
+		 * a queue size of 0, and DPDK silently dropped every packet
+		 * classified into it -- the first three classes worked because
+		 * their indices happen to coincide.
+		 */
 		for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++)
-			dpdk_params.qsize[i] = (uint16_t)qos_sp_qsize_get(
+			dpdk_params.qsize[i] = 0;
+		for (i = 0; i <= QOS_DANOS_TC_BE; i++)
+			dpdk_params.qsize[qos_dpdk_tc_index(i)] =
+				(uint16_t)qos_sp_qsize_get(
 					&qinfo->port_params, sinfo, i);
 
 		dpdk_params.pipe_profiles = pipe_profiles;
@@ -775,7 +862,7 @@ int qos_npf_classify(struct ifnet *ifp, const struct sched_info *qinfo,
 
 	rte_sched_port_pkt_write_v2(rcu_dereference(qinfo->dev_info.dpdk.port),
 				 *m, subport, pipe,
-				 qmap_to_tc(q), qmap_to_wrr(q),
+				 qos_dpdk_tc(q), qos_dpdk_wrr(q),
 				 RTE_COLOR_GREEN, dscp);
 	return result.decision;
 }
