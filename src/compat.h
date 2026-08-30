@@ -368,8 +368,26 @@ typedef uint16_t portid_t;
 #ifndef rte_sched_get_profile_for_pipe
 #define rte_sched_get_profile_for_pipe(port, qid) 0
 #endif
+/*
+ * DANOS's own scheduler geometry: four traffic classes of eight queues each,
+ * which is what its configuration, its CLI and dp_test_qos_basic's 64-entry
+ * DSCP map all assume. These were introduced with the DPDK 24 port and set to
+ * two bits and four queues, which is neither DANOS's model nor DPDK's -- the
+ * queue map byte could then only encode queues 0-3, and the show output
+ * enumerated four where callers expected eight.
+ *
+ * DPDK's own geometry is separate and smaller: RTE_SCHED_QUEUES_PER_PIPE (16)
+ * slots per pipe, all but the last traffic class holding a single queue. The
+ * two do not fit, so qos_dpdk.c maps between them; see the note there. Use
+ * QOS_QUEUES_PER_PIPE for anything sizing DANOS's own arrays and
+ * RTE_SCHED_QUEUES_PER_PIPE only where DPDK's layout is meant.
+ */
 #ifndef RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS
-#define RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS 4
+#define RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS 8
+#endif
+#ifndef QOS_QUEUES_PER_PIPE
+#define QOS_QUEUES_PER_PIPE \
+	(((RTE_SCHED_TC_MASK) + 1) * RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS)
 #endif
 
 #include <rte_cryptodev.h>
@@ -451,11 +469,8 @@ static const char * const rte_crypto_auth_algorithm_strings[] __attribute__((unu
 	[RTE_CRYPTO_AUTH_AES_GMAC] = "aes-gmac",
 };
 #endif
-#ifndef RTE_SCHED_TC_BITS
-#define RTE_SCHED_TC_BITS 4
-#endif
 #ifndef RTE_SCHED_WRR_BITS
-#define RTE_SCHED_WRR_BITS 2
+#define RTE_SCHED_WRR_BITS 3
 #endif
 #ifndef RTE_SCHED_TC_MASK
 #define RTE_SCHED_TC_MASK ((1 << RTE_SCHED_TC_BITS) - 1)

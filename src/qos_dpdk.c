@@ -93,10 +93,33 @@ static inline uint32_t qos_dpdk_tc_index(uint32_t danos_tc)
 		danos_tc : RTE_SCHED_TRAFFIC_CLASS_BE;
 }
 
+/*
+ * DANOS's queue within a class, expressed in DPDK's geometry.
+ *
+ * DANOS has eight queues per class; DPDK gives a single queue to every class
+ * except best effort, which gets RTE_SCHED_BE_QUEUES_PER_PIPE (four). The two
+ * do not fit, so:
+ *
+ *   classes 0-2  collapse to queue 0. DPDK schedules these strictly by
+ *                priority and has nowhere to put a second queue, so the WRR
+ *                weights configured within them cannot be honoured.
+ *   class 3 (BE) folds eight onto four, pairwise. Relative ordering is kept
+ *                and some weighting survives; queues 0-1 share DPDK queue 0,
+ *                2-3 share 1, and so on.
+ *
+ * The alternative -- spreading DANOS's queues across several DPDK classes --
+ * would turn weighting within a class into strict priority between classes,
+ * which is a different thing from what was configured. A predictable
+ * downgrade is preferable to silently changing what the configuration means.
+ */
 static inline uint32_t qos_dpdk_wrr(uint8_t q)
 {
-	/* Every class but best effort has a single queue. */
-	return qmap_to_tc(q) < QOS_DANOS_TC_BE ? 0 : qmap_to_wrr(q);
+	if (qmap_to_tc(q) < QOS_DANOS_TC_BE)
+		return 0;
+
+	return qmap_to_wrr(q) /
+		(RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS /
+		 RTE_SCHED_BE_QUEUES_PER_PIPE);
 }
 
 /*
@@ -110,8 +133,11 @@ static inline uint32_t qos_dpdk_qindex(struct sched_info *qinfo,
 				       uint32_t tc, uint32_t q)
 {
 	uint32_t dtc = tc < QOS_DANOS_TC_BE ? tc : RTE_SCHED_TRAFFIC_CLASS_BE;
+	uint32_t dq = tc < QOS_DANOS_TC_BE ? 0 :
+		q / (RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS /
+		     RTE_SCHED_BE_QUEUES_PER_PIPE);
 	uint32_t off = dtc < RTE_SCHED_TRAFFIC_CLASS_BE ?
-		dtc : RTE_SCHED_TRAFFIC_CLASS_BE + q;
+		dtc : RTE_SCHED_TRAFFIC_CLASS_BE + dq;
 
 	return (subport * qinfo->port_params.n_pipes_per_subport + pipe) *
 		RTE_SCHED_QUEUES_PER_PIPE + off;
