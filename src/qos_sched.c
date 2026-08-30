@@ -1067,9 +1067,11 @@ struct sched_info *qos_sched_new(struct ifnet *ifp,
 						       DEFAULT_TBSIZE);
 		pp->shaper.tc_period = qos_period_set(&profile_rates[i],
 						      DEFAULT_PERIOD);
-#ifdef RTE_SCHED_SUBPORT_TC_OV
-		pp->shaper.tc_ov_weight = 0;
-#endif
+		/* DPDK rejects a profile with a zero weight; 1 is its own
+		 * default. This used to be set to 0 behind an #ifdef that
+		 * never held.
+		 */
+		pp->shaper.tc_ov_weight = 1;
 		for (j = 0; j < RTE_SCHED_QUEUES_PER_PIPE; j++)
 			pp->wrr_weights[j] = 1;
 
@@ -3453,10 +3455,8 @@ static int cmd_qos_profile(struct ifnet *ifp, int argc, char **argv)
 			pipe->shaper.tc_period =
 				qos_period_set(&qinfo->profile_rates[profile],
 					       value); /* microseconds */
-#ifdef RTE_SCHED_SUBPORT_TC_OV
 		} else if (strcmp(argv[0], "over-weight") == 0) {
 			pipe->shaper.tc_ov_weight = value;
-#endif
 		} else if (strcmp(argv[0], "pcp") == 0) {
 			unsigned int q;
 
