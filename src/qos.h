@@ -147,9 +147,15 @@ struct qos_shaper_conf {
 	uint64_t	tc_rate[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE];
 	uint32_t	tc_period;
 	uint32_t	tb_size;
-#ifdef RTE_SCHED_SUBPORT_TC_OV
-	uint8_t		tc_ov_weight;	/* Weight TC 3 oversubscription */
-#endif
+	/*
+	 * Weight for TC 3 oversubscription. This was guarded by
+	 * RTE_SCHED_SUBPORT_TC_OV, a macro no DPDK we build against defines,
+	 * so the field did not exist -- and neither did the "over-weight"
+	 * configuration command, which was compiled out with it. DPDK 24.11
+	 * carries tc_ov_weight unconditionally and rejects a pipe profile
+	 * whose weight is zero, so the guard has to go.
+	 */
+	uint8_t		tc_ov_weight;
 };
 
 /* static_assert disabled for DPDK 24.11 structure compatibility */

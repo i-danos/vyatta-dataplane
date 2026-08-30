@@ -383,53 +383,121 @@ static void qos_copy_red_params(struct rte_red_params
 	}
 }
 
+/*
+ * Build the pipe profile table a subport is configured with.
+ *
+ * DPDK 21.05 moved pipe profiles from the port to the subport:
+ * rte_sched_port_params lost n_pipe_profiles/pipe_profiles and gained a table
+ * of subport profiles instead, while the pipe profiles became a member of
+ * rte_sched_subport_params. The two are unrelated -- a subport profile is a
+ * shaper (rates and a token bucket), a pipe profile also carries WRR weights.
+ * Caller owns the returned array.
+ */
+static struct rte_sched_pipe_params *
+qos_dpdk_build_pipe_profiles(struct qos_port_params *qos_params)
+{
+	struct rte_sched_pipe_params *profiles;
+	unsigned int i, j;
+
+	profiles = calloc(qos_params->n_pipe_profiles, sizeof(*profiles));
+	if (!profiles)
+		return NULL;
+
+	for (i = 0; i < qos_params->n_pipe_profiles; i++) {
+		struct rte_sched_pipe_params *to = &profiles[i];
+		struct qos_pipe_params *from = qos_params->pipe_profiles + i;
+
+		to->tc_period = from->shaper.tc_period;
+		to->tb_size = from->shaper.tb_size;
+		to->tb_rate = from->shaper.tb_rate;
+
+		/*
+		 * DPDK requires a non-zero oversubscription weight and
+		 * rejects the profile without one:
+		 *
+		 *     pipe_profile_check: Incorrect value for tc ov weight
+		 *
+		 * The field is called tc_ov_weight, and the assignment used
+		 * to name tc_tc_ov_weight guarded by RTE_SCHED_SUBPORT_TC_OV,
+		 * a macro DPDK 24.11 does not define -- so it never compiled
+		 * in and the field stayed at zero.
+		 */
+		to->tc_ov_weight = from->shaper.tc_ov_weight ?
+			from->shaper.tc_ov_weight : 1;
+
+		/*
+		 * Only the best-effort traffic class carries WRR weights, and
+		 * DPDK sizes the array by RTE_SCHED_BE_QUEUES_PER_PIPE (4).
+		 * DANOS keeps one per queue, RTE_SCHED_QUEUES_PER_PIPE (16),
+		 * so copying the whole DANOS array wrote twelve bytes past
+		 * the end of the DPDK structure.
+		 */
+		for (j = 0; j < RTE_SCHED_BE_QUEUES_PER_PIPE; j++)
+			to->wrr_weights[j] = from->wrr_weights[j];
+		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++)
+			to->tc_rate[j] = from->shaper.tc_rate[j];
+	}
+	return profiles;
+}
+
 static int qos_dpdk_setup_params(struct ifnet *ifp, struct sched_info *qinfo,
 				 struct rte_sched_port_params *dpdk_port_params)
 {
 	struct qos_port_params *qos_params = &qinfo->port_params;
 	int socketid = rte_eth_dev_socket_id(ifp->if_port);
+	struct rte_sched_subport_profile_params *subport_profiles;
 	unsigned int i, j;
-	struct rte_sched_pipe_params *pipe_profiles;
 
-	pipe_profiles = calloc(qos_params->n_pipe_profiles,
-			       sizeof(*pipe_profiles));
-	if (!pipe_profiles)
+	/*
+	 * One subport profile per subport, referenced by index when the
+	 * subport is configured. This used to hand DPDK the pipe profile
+	 * array cast to a subport profile pointer, which is wrong on both
+	 * counts: the structures differ in layout, so the stride was wrong
+	 * past the first element, and the array was never filled in at all --
+	 * calloc leaves tb_rate at 0, which rte_sched_port_check_params()
+	 * rejects with
+	 *
+	 *     Incorrect value for subport profiles
+	 *     Port scheduler params check failed (-22)
+	 *
+	 * so "qos <interface> enable" failed outright.
+	 */
+	subport_profiles = calloc(qinfo->n_subports, sizeof(*subport_profiles));
+	if (!subport_profiles)
 		return -1;
 
-	dpdk_port_params->subport_profiles = (struct rte_sched_subport_profile_params *)pipe_profiles;
+	for (i = 0; i < qinfo->n_subports; i++) {
+		struct rte_sched_subport_profile_params *to =
+			&subport_profiles[i];
+		struct qos_shaper_conf *from = &qinfo->subport[i].params;
+
+		to->tb_rate = from->tb_rate;
+		to->tb_size = from->tb_size;
+		to->tc_period = from->tc_period;
+		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++)
+			to->tc_rate[j] = from->tc_rate[j];
+	}
 
 	if (socketid < 0) /* SOCKET_ID_ANY */
 		socketid = 0;
 
 	dpdk_port_params->socket = socketid;
-	dpdk_port_params->n_subport_profiles = qos_params->n_pipe_profiles;
+	dpdk_port_params->subport_profiles = subport_profiles;
+	dpdk_port_params->n_subport_profiles = qinfo->n_subports;
+	dpdk_port_params->n_max_subport_profiles = qinfo->n_subports;
 	dpdk_port_params->rate = qos_params->rate;
 	dpdk_port_params->mtu = qos_params->mtu;
 	dpdk_port_params->frame_overhead = qos_params->frame_overhead;
 	dpdk_port_params->n_subports_per_port = qos_params->n_subports_per_port;
 	dpdk_port_params->n_pipes_per_subport = qos_params->n_pipes_per_subport;
-	for (i = 0; i < qos_params->n_pipe_profiles; i++) {
-		struct rte_sched_pipe_params *to = &pipe_profiles[i];
-		struct qos_pipe_params *from =
-				qos_params->pipe_profiles + i;
 
-		to->tc_period = from->shaper.tc_period;
-		to->tb_size = from->shaper.tb_size;
-#ifdef RTE_SCHED_SUBPORT_TC_OV
-		to->tc_tc_ov_weight = from->shaper.tc_ov_weight;
-#endif
-		to->tb_rate = from->shaper.tb_rate;
-		for (j = 0; j < RTE_SCHED_QUEUES_PER_PIPE; j++)
-			to->wrr_weights[j] = from->wrr_weights[j];
-		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++)
-			to->tc_rate[j] = from->shaper.tc_rate[j];
-	}
 	return 0;
 }
 
 static void qos_dpdk_free_params(struct rte_sched_port_params *dpdk_port_params)
 {
 	free(dpdk_port_params->subport_profiles);
+	dpdk_port_params->subport_profiles = NULL;
 }
 
 /* Allocate and initialize a handle to QoS scheduler.
@@ -443,6 +511,7 @@ int qos_dpdk_start(struct ifnet *ifp, struct sched_info *qinfo,
 	int ret;
 	uint32_t q_array_size;
 	struct rte_sched_port_params dpdk_port_params = {0};
+	struct rte_sched_pipe_params *pipe_profiles = NULL;
 	const uint32_t max_burst_size = QOS_MAX_BURST_SIZE_DPDK;
 
 	if (enable_transmit_thread(ifp->if_port) < 0) {
@@ -492,33 +561,68 @@ int qos_dpdk_start(struct ifnet *ifp, struct sched_info *qinfo,
 		goto out_disable_tx;
 	}
 
+	/*
+	 * Built once and shared by every subport, so it has to outlive the
+	 * subport loop below rather than being freed with the port params.
+	 */
+	pipe_profiles = qos_dpdk_build_pipe_profiles(&qinfo->port_params);
+	if (!pipe_profiles) {
+		qos_dpdk_free_params(&dpdk_port_params);
+		DP_DEBUG(QOS_DP, ERR, DATAPLANE,
+			 "QoS pipe profile setup failed\n");
+		goto out_disable_tx;
+	}
+
 	port = rte_sched_port_config_v2(&dpdk_port_params, q_array_size);
 	if (port == NULL) {
 		DP_DEBUG(QOS_DP, ERR, DATAPLANE,
 			 "QoS config port failed\n");
 		qos_dpdk_free_params(&dpdk_port_params);
+		free(pipe_profiles);
 		goto out_disable_tx;
 	}
 
 	for (subport = 0; subport < qinfo->n_subports; subport++) {
 		struct subport_info *sinfo = &qinfo->subport[subport];
-		struct qos_shaper_conf *qos_params = &sinfo->params;
-		struct rte_sched_subport_params dpdk_params;
-		uint16_t qsize[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE] __attribute__((unused));
+		struct rte_sched_subport_params dpdk_params = {0};
 		struct rte_red_params
 			dpdk_red_params[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE]
 				       [RTE_COLORS];
 		int i;
 
+		/*
+		 * The queue sizes and the pipe profiles both belong here.
+		 * This used to memcpy a struct qos_shaper_conf over
+		 * rte_sched_subport_params, which share no layout at all:
+		 * the shaper starts with a 64-bit tb_rate and the subport
+		 * params start with n_pipes_per_subport_enabled followed by
+		 * the qsize array and a pipe_profiles pointer, so the rate
+		 * was read as a pipe count and rate data as a pointer. The
+		 * qsize array computed just below was then thrown away,
+		 * which is what the __attribute__((unused)) on it was
+		 * papering over.
+		 */
+		dpdk_params.n_pipes_per_subport_enabled =
+			qinfo->port_params.n_pipes_per_subport;
 		for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++)
-			qsize[i] = (uint16_t)qos_sp_qsize_get(
+			dpdk_params.qsize[i] = (uint16_t)qos_sp_qsize_get(
 					&qinfo->port_params, sinfo, i);
 
-		memcpy(&dpdk_params, qos_params, sizeof(*qos_params));
+		dpdk_params.pipe_profiles = pipe_profiles;
+		dpdk_params.n_pipe_profiles =
+			qinfo->port_params.n_pipe_profiles;
+		dpdk_params.n_max_pipe_profiles =
+			qinfo->port_params.n_pipe_profiles;
+
 		qos_copy_red_params(dpdk_red_params, sinfo);
 
-		ret = rte_sched_subport_config_v2(port, subport, &dpdk_params,
-						  &qsize[0], dpdk_red_params);
+		/*
+		 * The fourth argument is the index into the port's subport
+		 * profile table, which qos_dpdk_setup_params() fills one
+		 * entry per subport.
+		 */
+		ret = rte_sched_subport_config(port, subport, &dpdk_params,
+					       subport);
 		if (ret != 0) {
 			DP_DEBUG(QOS_DP, ERR, DATAPLANE,
 				 "Qos config subport %u failed: %d\n",
@@ -554,11 +658,13 @@ int qos_dpdk_start(struct ifnet *ifp, struct sched_info *qinfo,
 	rcu_assign_pointer(qinfo->dev_info.dpdk.port, port);
 	defer_rcu(qos_dpdk_port_free_rcu, old_port);
 	qos_dpdk_free_params(&dpdk_port_params);
+	free(pipe_profiles);
 	return 0;
 
  out_free_sched:
 	rte_sched_port_free(port);
 	qos_dpdk_free_params(&dpdk_port_params);
+	free(pipe_profiles);
  out_disable_tx:
 	ifp->qos_software_fwd = 0;
 	disable_transmit_thread(ifp->if_port);
@@ -667,7 +773,8 @@ int qos_npf_classify(struct ifnet *ifp, const struct sched_info *qinfo,
 		}
 	}
 
-	rte_sched_port_pkt_write_v2(*m, subport, pipe,
+	rte_sched_port_pkt_write_v2(rcu_dereference(qinfo->dev_info.dpdk.port),
+				 *m, subport, pipe,
 				 qmap_to_tc(q), qmap_to_wrr(q),
 				 RTE_COLOR_GREEN, dscp);
 	return result.decision;

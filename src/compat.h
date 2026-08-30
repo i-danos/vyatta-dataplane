@@ -685,8 +685,20 @@ enum {
 #ifndef rte_sched_pipe_config_v2
 #define rte_sched_pipe_config_v2(port, subport, pipe, profile, port_params) rte_sched_pipe_config(port, subport, pipe, profile)
 #endif
+/*
+ * DPDK 21.05 added the port handle as the first argument, and it is
+ * dereferenced -- the scheduler reads its queue geometry to pack the
+ * hierarchy path into the mbuf. Passing NULL segfaults in the data path as
+ * soon as QoS actually forwards a packet:
+ *
+ *     rte_sched_port_pkt_write+0x4
+ *     qos_sched
+ *
+ * The caller has the port in qinfo->dev_info.dpdk.port, so take it.
+ */
 #ifndef rte_sched_port_pkt_write_v2
-#define rte_sched_port_pkt_write_v2(pkt, subport, pipe, tc, queue, color, dscp) rte_sched_port_pkt_write(NULL, pkt, subport, pipe, tc, queue, color)
+#define rte_sched_port_pkt_write_v2(port, pkt, subport, pipe, tc, queue, color, dscp) \
+	rte_sched_port_pkt_write(port, pkt, subport, pipe, tc, queue, color)
 #endif
 #ifndef rte_red_free_q_params
 #define rte_red_free_q_params(pp, i) (void)0
