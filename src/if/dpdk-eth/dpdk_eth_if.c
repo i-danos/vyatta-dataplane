@@ -951,8 +951,6 @@ dpdk_eth_if_show_dev_info(struct ifnet *ifp, json_writer_t *wr)
 		    get_switch_dev_info(info.driver_name, dev_name_buf,
 					&hw_switch, NULL))
 			jsonw_uint_field(wr, "hw_switch_id", hw_switch);
-
-		jsonw_end_object(wr);
 	}
 
 	const char *dname = info.device ? rte_dev_name(info.device) : NULL;
@@ -1013,6 +1011,8 @@ dpdk_eth_if_show_dev_info(struct ifnet *ifp, json_writer_t *wr)
 
 	if (is_pci && dpdk_eth_is_mgmt_port(&loc))
 		jsonw_bool_field(wr, "management", true);
+
+	jsonw_end_object(wr);
 }
 
 /* Device with statistics in hardware */
