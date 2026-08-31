@@ -375,9 +375,29 @@ typedef uint16_t portid_t;
 #ifndef RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS
 #define RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS 8
 #endif
+/*
+ * DANOS's own scheduler geometry: four traffic classes of eight queues.
+ *
+ * Not RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE, which is DPDK's thirteen. In the
+ * DANOS DPDK fork the two were the same number, so code meaning "our four
+ * classes" spelled it the DPDK way and was right. Retiring the fork changed
+ * the value under all of it, and the two numbers then disagreed silently.
+ *
+ * Note that RTE_SCHED_TC_BITS, RTE_SCHED_TC_MASK, RTE_SCHED_WRR_BITS,
+ * RTE_SCHED_WRR_MASK and RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS are defined by
+ * this header, not by DPDK, and already carry DANOS's values. Only
+ * TRAFFIC_CLASSES_PER_PIPE, QUEUES_PER_PIPE, BE_QUEUES_PER_PIPE and
+ * TRAFFIC_CLASS_BE come from rte_sched.h.
+ *
+ * Rule: anything sizing or walking a DANOS structure uses these; only what
+ * is handed to, or read back from, DPDK uses DPDK's.
+ */
+#ifndef QOS_TRAFFIC_CLASSES_PER_PIPE
+#define QOS_TRAFFIC_CLASSES_PER_PIPE ((RTE_SCHED_TC_MASK) + 1)
+#endif
 #ifndef QOS_QUEUES_PER_PIPE
 #define QOS_QUEUES_PER_PIPE \
-	(((RTE_SCHED_TC_MASK) + 1) * RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS)
+	(QOS_TRAFFIC_CLASSES_PER_PIPE * RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS)
 #endif
 
 #include <rte_cryptodev.h>

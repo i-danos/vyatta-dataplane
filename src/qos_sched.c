@@ -1059,7 +1059,7 @@ struct sched_info *qos_sched_new(struct ifnet *ifp,
 	rte_spinlock_init(&qinfo->stats_lock);
 
 	qinfo->port_params.qsize_type = QOS_QUEUE_SIZE_PACKETS;
-	for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++)
+	for (i = 0; i < QOS_TRAFFIC_CLASSES_PER_PIPE; i++)
 		qinfo->port_params.qsize[i] = DEFAULT_QSIZE;
 
 	/* Default parms for pipes */
@@ -1081,7 +1081,7 @@ struct sched_info *qos_sched_new(struct ifnet *ifp,
 		for (j = 0; j < QOS_QUEUES_PER_PIPE; j++)
 			pp->wrr_weights[j] = 1;
 
-		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++) {
+		for (j = 0; j < QOS_TRAFFIC_CLASSES_PER_PIPE; j++) {
 			pp->shaper.tc_rate[j] = MAX_LINERATE;
 			qos_abs_rate_save(&profile_tc_rates[i].tc_rate[j],
 					  MAX_LINERATE);
@@ -1104,7 +1104,7 @@ struct sched_info *qos_sched_new(struct ifnet *ifp,
 		/*
 		 * Set up the default pipe-queue to tc-n/wrr-0 qmap information
 		 */
-		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++)
+		for (j = 0; j < QOS_TRAFFIC_CLASSES_PER_PIPE; j++)
 			qmap->conf_ids[QMAP(j, 0)] = CONF_ID_Q_DEFAULT |
 				(j * RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS);
 
@@ -1138,7 +1138,7 @@ struct sched_info *qos_sched_new(struct ifnet *ifp,
 						      DEFAULT_PERIOD);
 
 		sp->qsize_type = QOS_QUEUE_SIZE_PACKETS;
-		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++) {
+		for (j = 0; j < QOS_TRAFFIC_CLASSES_PER_PIPE; j++) {
 			qos_abs_rate_save(&sp->sp_tc_rates.tc_rate[j],
 					  MAX_LINERATE);
 			sp->params.tc_rate[j] = MAX_LINERATE;
@@ -1188,7 +1188,7 @@ void qos_sched_subport_params_check(
 		params->tb_size = max_burst_size;
 
 	period = params->tc_period;
-	for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++) {
+	for (i = 0; i < QOS_TRAFFIC_CLASSES_PER_PIPE; i++) {
 		params->tc_rate[i] = qos_rate_get(&config_tc_rate[i],
 						  params->tb_rate, qinfo,
 						  false);
@@ -1287,7 +1287,7 @@ static void qos_show_subport(json_writer_t *wr,
 	jsonw_name(wr, "tc");
 	jsonw_start_array(wr);
 	rte_spinlock_lock(&qinfo->stats_lock);
-	for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++) {
+	for (i = 0; i < QOS_TRAFFIC_CLASSES_PER_PIPE; i++) {
 		uint64_t packets;
 		uint64_t bytes;
 		uint64_t dropped;
@@ -1339,7 +1339,7 @@ static void qos_show_pipe_config(json_writer_t *wr,
 
 	jsonw_name(wr, "tc_rates");
 	jsonw_start_array(wr);
-	for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++)
+	for (i = 0; i < QOS_TRAFFIC_CLASSES_PER_PIPE; i++)
 		jsonw_uint(wr, p->shaper.tc_rate[i]);
 
 	jsonw_end_array(wr);
@@ -1410,7 +1410,7 @@ uint32_t qos_sched_calc_qindex(struct sched_info *qinfo, unsigned int subport,
 
 	qid = subport * qinfo->port_params.n_pipes_per_subport +
 		pipe;
-	qid = qid * RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE + tc;
+	qid = qid * QOS_TRAFFIC_CLASSES_PER_PIPE + tc;
 	qid = qid * RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS + q;
 
 	return qid;
@@ -1438,7 +1438,7 @@ static void qos_show_stats(json_writer_t *wr, struct sched_info *qinfo,
 
 	jsonw_name(wr, "tc");
 	jsonw_start_array(wr);
-	for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; ++tc) {
+	for (tc = 0; tc < QOS_TRAFFIC_CLASSES_PER_PIPE; ++tc) {
 
 		jsonw_start_array(wr);
 		for (q = 0; q < RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS; ++q) {
@@ -2384,7 +2384,7 @@ static void qos_clear_pipe_stats(struct sched_info *qinfo, uint32_t subport,
 	uint32_t tc;
 	uint32_t q;
 
-	for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; ++tc) {
+	for (tc = 0; tc < QOS_TRAFFIC_CLASSES_PER_PIPE; ++tc) {
 		for (q = 0; q < RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS; q++)
 			QOS_QUEUE_CLR_STATS(qinfo)(qinfo, subport, pipe, tc, q);
 	}
@@ -2784,7 +2784,7 @@ static int cmd_qos_subport_queue(struct subport_info *sinfo, unsigned int qid,
 		return -EINVAL;
 	}
 
-	if (qid >= RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE) {
+	if (qid >= QOS_TRAFFIC_CLASSES_PER_PIPE) {
 		RTE_LOG(ERR, QOS, "traffic-class %u out of range\n", qid);
 		return -EINVAL;
 	}
@@ -3019,7 +3019,7 @@ static bool valid_qmap(unsigned int q)
 	uint8_t wrr = qmap_to_wrr(q);
 	uint8_t dp = qmap_to_dp(q);
 
-	if (tc >= RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE) {
+	if (tc >= QOS_TRAFFIC_CLASSES_PER_PIPE) {
 		DP_DEBUG(QOS, ERR, DATAPLANE,
 			 "traffic class %u out of range\n", tc);
 		return false;
@@ -3079,7 +3079,7 @@ static int cmd_qos_profile_queue(struct sched_info *qinfo, unsigned int profile,
 	if (strcmp(argv[2], "percent") == 0) {
 		float percent_bw;
 
-		if (value >= RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE) {
+		if (value >= QOS_TRAFFIC_CLASSES_PER_PIPE) {
 			DP_DEBUG(QOS, ERR, DATAPLANE,
 				 "traffic-class %u out of range\n", value);
 			return -EINVAL;
@@ -3096,7 +3096,7 @@ static int cmd_qos_profile_queue(struct sched_info *qinfo, unsigned int profile,
 	} else if (strcmp(argv[2], "rate") == 0) {
 		unsigned long rate;
 
-		if (value >= RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE) {
+		if (value >= QOS_TRAFFIC_CLASSES_PER_PIPE) {
 			DP_DEBUG(QOS, ERR, DATAPLANE,
 				 "traffic-class %u out of range\n", value);
 			return -EINVAL;
@@ -3750,7 +3750,7 @@ static int cmd_qos_params(struct ifnet *ifp, int argc, char **argv)
 		return -EINVAL;
 	}
 
-	if (tc_id >= RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE) {
+	if (tc_id >= QOS_TRAFFIC_CLASSES_PER_PIPE) {
 		DP_DEBUG(QOS, ERR, DATAPLANE, "tc-id %u out of range\n", tc_id);
 		return -EINVAL;
 	}
@@ -5047,7 +5047,7 @@ bool qos_sched_subport_get_stats(struct sched_info *qinfo, uint16_t vlan_id,
 	}
 
 	rte_spinlock_lock(&qinfo->stats_lock);
-	for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; tc++) {
+	for (tc = 0; tc < QOS_TRAFFIC_CLASSES_PER_PIPE; tc++) {
 		/*
 		 * The caller is only interested in the drop counters.
 		 */
