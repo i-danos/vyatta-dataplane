@@ -143,52 +143,69 @@ static inline uint32_t qos_dpdk_qindex(struct sched_info *qinfo,
 		RTE_SCHED_QUEUES_PER_PIPE + off;
 }
 
-static char *qos_get_dscp_grp(struct sched_info *qinfo, uint32_t qid, int i)
-{
-	struct qos_pipe_params *pp;
-	struct qos_red_pipe_params *wred_params;
-	int profile;
-
-	profile = rte_sched_get_profile_for_pipe(qinfo->dev_info.dpdk.port,
-						 qid);
-	if (profile < 0)
-		return NULL;
-
-	pp = &qinfo->port_params.pipe_profiles[profile];
-	wred_params = qos_red_find_q_params(pp, qid);
-	if (wred_params)
-		return wred_params->red_q_params.grp_names[i];
-
-	return NULL;
-}
-
+/*
+ * Emit the WRED resource groups configured on one queue.
+ *
+ * This asked DPDK two questions it cannot answer -- which pipe profile a
+ * pipe uses, and how many maps a queue has -- through compat.h shims that
+ * returned 0 and 1. Both are ours to answer: qos_red_init_q_params() is
+ * what fills these structures in, and sinfo->profile_map is what records
+ * the pipe's profile. qos_hw_dscp_resgrp_json() has always read them
+ * directly; this is the same walk.
+ *
+ * The lookup key was wrong on top of that. WRED parameters are stored
+ * against the per-pipe queue index q_from_mask() builds, tc * 8 + q,
+ * while what was passed here is qos_dpdk_qindex()'s port-wide queue id
+ * -- (subport * pipes + pipe) * 16 + off. The two agree only on the
+ * first pipe of the first subport, so qos_red_find_q_params() returned
+ * NULL, qos_get_dscp_grp() returned NULL, and the loop broke on its
+ * first iteration. The visible result was an empty "wred_map": [] on
+ * every queue, which reads as "none configured" rather than as a defect.
+ */
 void qos_dpdk_dscp_resgrp_json(struct sched_info *qinfo, uint32_t subport,
 			       uint32_t pipe, uint32_t tc, uint32_t q,
 			       uint64_t *random_dscp_drop, json_writer_t *wr)
 {
-	uint32_t qid;
-	int i, num_maps;
+	struct subport_info *sinfo = qinfo->subport + subport;
+	struct qos_red_pipe_params *wred;
+	struct qos_pipe_params *prof;
+	unsigned int qindex;
+	uint8_t profile_id;
+	int i;
 
-	qid = qos_dpdk_qindex(qinfo, subport, pipe, tc, q);
+	profile_id = sinfo->profile_map[pipe];
+	if (profile_id >= qinfo->port_params.n_pipe_profiles)
+		return;
 
-	num_maps = rte_red_queue_num_maps(qinfo->dev_info.dpdk.port, qid);
-	if (num_maps) {
-		char *grp_name;
+	prof = &qinfo->port_params.pipe_profiles[profile_id];
+	qindex = (tc * RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS) + q;
 
-		jsonw_name(wr, "wred_map");
-		jsonw_start_array(wr);
-		for (i = 0; i < num_maps; i++) {
-			grp_name = qos_get_dscp_grp(qinfo, qid, i);
-			if (grp_name == NULL)
-				break;
-			jsonw_start_object(wr);
-			jsonw_string_field(wr, "res_grp", grp_name);
-			jsonw_uint_field(wr, "random_dscp_drop",
-					 random_dscp_drop[i]);
-			jsonw_end_object(wr);
-		}
-		jsonw_end_array(wr);
+	wred = qos_red_find_q_params(prof, qindex);
+	if (!wred || !wred->red_q_params.num_maps)
+		return;
+
+	/*
+	 * grp_names[] is indexed by wred_index, which is a running map
+	 * number under wred-per-dscp and a drop precedence otherwise, so
+	 * the bound is the array's own RTE_NUM_DSCP_MAPS rather than
+	 * NUM_DPS. dps_in_use says which entries were filled;
+	 * random_dscp_drop[] is indexed the same way.
+	 */
+	jsonw_name(wr, "wred_map");
+	jsonw_start_array(wr);
+	for (i = 0; i < RTE_NUM_DSCP_MAPS; i++) {
+		char *grp_name = wred->red_q_params.grp_names[i];
+
+		if (!(wred->red_q_params.dps_in_use & (1 << i)))
+			continue;
+		if (grp_name == NULL)
+			continue;
+		jsonw_start_object(wr);
+		jsonw_string_field(wr, "res_grp", grp_name);
+		jsonw_uint_field(wr, "random_dscp_drop", random_dscp_drop[i]);
+		jsonw_end_object(wr);
 	}
+	jsonw_end_array(wr);
 }
 
 int qos_dpdk_subport_read_stats(struct sched_info *qinfo,
@@ -477,6 +494,39 @@ static uint32_t qos_sched_subport_qsize(struct qos_port_params *pp,
 		pp->n_pipes_per_subport * sizeof(struct rte_mbuf *));
 }
 
+/*
+ * Bring a RED threshold into the range stock DPDK accepts.
+ *
+ * The DANOS DPDK fork carried rte_red_set_scaling(), called once from
+ * qos_init() with MAX_RED_QUEUE_LENGTH (8192), which widened RED's
+ * fixed-point threshold field. Stock DPDK has no such knob:
+ * RTE_RED_MAX_TH_MAX is 1023 and rte_red_config_init() rejects anything
+ * above it. compat.h stubbed the call out as a constant 0 -- reporting
+ * success, doing nothing -- and left the thresholds to arrive unchanged.
+ *
+ * Nothing checked them on the way. qos_wred_threshold_get() range-checks
+ * only its QOS_QUEUE_SIZE_USEC branch, and even that clamps no lower than
+ * MAX_QUEUE_LIMIT_BYTES (500000000); the packets and bytes branches pass
+ * the value straight through. It was then cast to uint16_t, so a
+ * threshold of 70000 arrived as 4464 -- not merely too large but
+ * arbitrary, and smaller than a neighbour that had not wrapped.
+ *
+ * Clamping loses precision on queues longer than 1023. Failing loses
+ * more: rte_red_config_init()'s error propagates out of
+ * rte_sched_subport_config(), so one over-long threshold would take the
+ * whole policy's shaping down with it. Clamp, and say so -- which is what
+ * the USEC branch already does for its own limits.
+ */
+static uint16_t qos_red_clamp_th(uint32_t th, const char *what)
+{
+	if (th <= RTE_RED_MAX_TH_MAX)
+		return (uint16_t)th;
+
+	RTE_LOG(INFO, DATAPLANE, "Rounding down RED %s from %u to %d\n",
+		what, th, RTE_RED_MAX_TH_MAX);
+	return RTE_RED_MAX_TH_MAX;
+}
+
 static void qos_copy_red_params(struct rte_red_params
 						dpdk[][RTE_COLORS],
 				struct subport_info *sinfo)
@@ -491,8 +541,10 @@ static void qos_copy_red_params(struct rte_red_params
 					sinfo->params.tc_rate[i],
 					&wred_min_th, &wred_max_th);
 
-			dpdk[i][j].min_th = (uint16_t)wred_min_th;
-			dpdk[i][j].max_th = (uint16_t)wred_max_th;
+			dpdk[i][j].min_th = qos_red_clamp_th(wred_min_th,
+							     "min_th");
+			dpdk[i][j].max_th = qos_red_clamp_th(wred_max_th,
+							     "max_th");
 			dpdk[i][j].maxp_inv =
 				(uint16_t)sinfo->red_params[i][j].maxp_inv;
 			dpdk[i][j].wq_log2 =

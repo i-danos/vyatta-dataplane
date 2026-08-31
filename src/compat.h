@@ -334,10 +334,6 @@ typedef uint16_t portid_t;
 #define rte_sched_subport_read_stats64 rte_sched_subport_read_stats
 #define rte_sched_queue_stats64 rte_sched_queue_stats
 #define rte_sched_queue_read_stats64 rte_sched_queue_read_stats
-#ifndef rte_red_queue_num_maps
-#define rte_red_queue_num_maps(port, qid) 1
-#endif
-
 #ifndef RTE_MAX_DSCP_MAPS
 #define RTE_MAX_DSCP_MAPS 16
 #endif
@@ -361,12 +357,6 @@ typedef uint16_t portid_t;
 #endif
 #ifndef RTE_SCHED_TC_BITS
 #define RTE_SCHED_TC_BITS 2
-#endif
-#ifndef rte_red_set_scaling
-#define rte_red_set_scaling(max_len) 0
-#endif
-#ifndef rte_sched_get_profile_for_pipe
-#define rte_sched_get_profile_for_pipe(port, qid) 0
 #endif
 /*
  * DANOS's own scheduler geometry: four traffic classes of eight queues each,
