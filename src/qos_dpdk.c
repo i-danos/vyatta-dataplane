@@ -832,8 +832,30 @@ int qos_dpdk_start(struct ifnet *ifp, struct sched_info *qinfo,
 		goto out_disable_tx;
 	}
 
-	for (subport = 0; subport < qinfo->n_subports; subport++) {
-		struct subport_info *sinfo = &qinfo->subport[subport];
+	/*
+	 * Every subport DPDK was told about has to be configured, not just
+	 * the ones carrying configuration.
+	 *
+	 * qos_dpdk_port() rounds the subport count up to a power of two --
+	 * n_subports = 3 becomes n_subports_per_port = 4 -- and keeps the
+	 * real count separately. Only the real ones were configured here, so
+	 * port->subports[3] stayed NULL, and rte_sched_port_dequeue() walks
+	 * all n_subports_per_port entries and dereferences each one. That is
+	 * a NULL dereference in the transmit path, which runs continuously
+	 * once QoS is enabled whether or not there is traffic.
+	 *
+	 * It needed three subports to show: every other configuration in the
+	 * test suite has a subport count that is already a power of two, so
+	 * the rounding is a no-op and the gap never opens.
+	 *
+	 * The padding entries take subport 0's configuration and its subport
+	 * profile. There are only n_subports profiles, and nothing is ever
+	 * classified into these subports, so the values need only be valid.
+	 */
+	for (subport = 0; subport < qinfo->port_params.n_subports_per_port;
+	     subport++) {
+		uint32_t cfg = subport < qinfo->n_subports ? subport : 0;
+		struct subport_info *sinfo = &qinfo->subport[cfg];
 		struct rte_sched_subport_params dpdk_params = {0};
 		struct rte_red_params
 			dpdk_red_params[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE]
@@ -887,7 +909,7 @@ int qos_dpdk_start(struct ifnet *ifp, struct sched_info *qinfo,
 		 * entry per subport.
 		 */
 		ret = rte_sched_subport_config(port, subport, &dpdk_params,
-					       subport);
+					       cfg);
 		if (ret != 0) {
 			DP_DEBUG(QOS_DP, ERR, DATAPLANE,
 				 "Qos config subport %u failed: %d\n",
