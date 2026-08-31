@@ -119,7 +119,7 @@ static const char expected_ingress_map_str[] =
 	"}]"
 "}";
 
-DP_START_TEST(qos_class_basic, class_basic)
+DP_START_TEST_DONT_RUN(qos_class_basic, class_basic)
 {
 	bool debug = (dp_test_debug_get() == 2 ? true : false);
 	int ret;
@@ -366,7 +366,7 @@ static const char  expected_ingress_multi_map_vlan_cmds[] =
 	"}"
 "}";
 
-DP_START_TEST(qos_class_basic, class_multimaps)
+DP_START_TEST_DONT_RUN(qos_class_basic, class_multimaps)
 {
 	bool debug = (dp_test_debug_get() == 2 ? true : false);
 	int ret, i;
@@ -517,7 +517,7 @@ static const char expected_ingress_map_dp_cmds[] =
 	"}]"
 "}";
 
-DP_START_TEST(qos_class_basic, class_map_multi_dps)
+DP_START_TEST_DONT_RUN(qos_class_basic, class_map_multi_dps)
 {
 	bool debug = (dp_test_debug_get() == 2 ? true : false);
 	int ret;
@@ -796,7 +796,7 @@ static const char  expected_ingress_map_2_pol[] =
 	"}]"
 "}";
 
-DP_START_TEST(qos_class_basic, class_map_to_policy)
+DP_START_TEST_DONT_RUN(qos_class_basic, class_map_to_policy)
 {
 	bool debug = (dp_test_debug_get() == 2 ? true : false);
 	int ret, i;
@@ -941,7 +941,7 @@ const char *ingress_policy_skip_des_cmds[] = {
 	"enable",
 };
 
-DP_START_TEST(qos_class_basic, class_policy_skip_des)
+DP_START_TEST_DONT_RUN(qos_class_basic, class_policy_skip_des)
 {
 	bool debug = (dp_test_debug_get() == 2 ? true : false);
 	int ret;
@@ -1035,7 +1035,7 @@ const char *class_policy_vci[] = {
 	"enable",
 };
 
-DP_START_TEST(qos_class_basic, class_policy_vci)
+DP_START_TEST_DONT_RUN(qos_class_basic, class_policy_vci)
 {
 	bool debug = (dp_test_debug_get() == 2 ? true : false);
 	int ret;

@@ -287,10 +287,13 @@ cores_available = run_command('nproc').stdout().to_int()
 # knowing, and restoring the feature should restore the test with it.
 suites_not_run = [
         'dp_test_switch.c',
-        # Both drive switch ports too: qos_class checks QoS on dp1sw_port_N_M
-        # and qos_fal the FAL offload behind them. Neither has anything to do
-        # with the software scheduler.
-        'dp_test_qos_class.c',
+        # dp_test_qos_fal.c drives switch ports too -- all nine of its cases
+        # configure dp1sw_port_N_M and assert on the FAL offload behind them,
+        # which 2608 dropped along with switch-vendor support.
+        #
+        # dp_test_qos_class.c is registered: six of its seven cases are the
+        # same switch-port story and are marked DONT_RUN individually, but
+        # class_single_sysdef touches no switch port and is worth running.
         'dp_test_qos_fal.c',
 ]
 
