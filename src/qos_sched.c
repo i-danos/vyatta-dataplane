@@ -359,9 +359,15 @@ qos_init(void)
 {
 	int i, ret;
 
-	if (rte_red_set_scaling(MAX_RED_QUEUE_LENGTH) != 0)
-		rte_panic("Failed to set RED scaling\n");
-
+	/*
+	 * MAX_RED_QUEUE_LENGTH used to be handed to the DANOS DPDK fork's
+	 * rte_red_set_scaling() here, widening RED's threshold field to
+	 * 8192. Stock DPDK caps it at RTE_RED_MAX_TH_MAX (1023) and has no
+	 * equivalent, so the thresholds are clamped where they are handed
+	 * over instead -- see qos_red_clamp_th() in qos_dpdk.c. The shim
+	 * that stood here returned 0 unconditionally, which made this
+	 * rte_panic() unreachable and the whole call a no-op.
+	 */
 	qos_external_buf_monitor_init();
 	SLIST_INIT(&qos_qinfos.qinfo_head);
 
