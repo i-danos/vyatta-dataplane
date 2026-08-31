@@ -1,3 +1,13 @@
+vyatta-dataplane (3.14.38) unstable; urgency=medium
+
+  * npf_rte_acl: stop the optimiser thread where its lifetime actually ends
+  * qos: configure every subport DPDK was told about, not just the used ones
+  * qos: answer from DANOS's own state instead of three compat stubs
+  * qos: separate DANOS's four traffic classes from DPDK's thirteen
+  * qos: round the queue size to what DPDK will accept, rather than wrap it
+
+ -- i-danos dev <dev@i-danos.dev>  Mon, 31 Aug 2026 23:05:30 +0800
+
 vyatta-dataplane (3.14.37) unstable; urgency=medium
 
   * qos: adapt to the scheduler model DPDK 21.05 introduced
