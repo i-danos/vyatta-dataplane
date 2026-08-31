@@ -485,7 +485,8 @@ static uint32_t qos_sched_subport_qsize(struct qos_port_params *pp,
 	uint32_t queue_array_size = 0;
 	uint32_t tc;
 
-	for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; tc++) {
+	/* DANOS's classes: qos_sp_qsize_get() reads sinfo->qsize[]. */
+	for (tc = 0; tc < QOS_TRAFFIC_CLASSES_PER_PIPE; tc++) {
 		uint32_t qsize = qos_sp_qsize_get(pp, sinfo, tc);
 		queue_array_size += qsize;
 	}
@@ -533,7 +534,18 @@ static void qos_copy_red_params(struct rte_red_params
 {
 	int i, j;
 
-	for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++) {
+	/*
+	 * The caller's array is DPDK-shaped and not initialised, so clear the
+	 * classes DANOS does not fill rather than leave them holding stack.
+	 */
+	for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++)
+		for (j = 0; j < RTE_COLORS; j++)
+			dpdk[i][j] = (struct rte_red_params){ 0 };
+
+	/* Read at DANOS's class index, write at DPDK's. */
+	for (i = 0; i < QOS_TRAFFIC_CLASSES_PER_PIPE; i++) {
+		uint32_t d = qos_dpdk_tc_index(i);
+
 		for (j = 0; j < RTE_COLORS; j++) {
 			uint32_t wred_min_th = 0;
 			uint32_t wred_max_th = 0;
@@ -541,13 +553,13 @@ static void qos_copy_red_params(struct rte_red_params
 					sinfo->params.tc_rate[i],
 					&wred_min_th, &wred_max_th);
 
-			dpdk[i][j].min_th = qos_red_clamp_th(wred_min_th,
+			dpdk[d][j].min_th = qos_red_clamp_th(wred_min_th,
 							     "min_th");
-			dpdk[i][j].max_th = qos_red_clamp_th(wred_max_th,
+			dpdk[d][j].max_th = qos_red_clamp_th(wred_max_th,
 							     "max_th");
-			dpdk[i][j].maxp_inv =
+			dpdk[d][j].maxp_inv =
 				(uint16_t)sinfo->red_params[i][j].maxp_inv;
-			dpdk[i][j].wq_log2 =
+			dpdk[d][j].wq_log2 =
 				(uint16_t)sinfo->red_params[i][j].wq_log2;
 		}
 	}
@@ -661,15 +673,19 @@ static int qos_dpdk_setup_params(struct ifnet *ifp, struct sched_info *qinfo,
 		to->tb_size = from->tb_size;
 		to->tc_period = from->tc_period;
 		/*
-		 * Straight copy, no class remapping. DPDK checks a subport
-		 * profile differently from a pipe profile: every tc_rate must
-		 * be non-zero here, whereas in a pipe profile it must be
-		 * non-zero exactly where qsize is. DANOS fills all
-		 * RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE entries, so this
-		 * satisfies it.
+		 * DPDK checks a subport profile differently from a pipe
+		 * profile: every tc_rate must be non-zero here, whereas in a
+		 * pipe profile it must be non-zero exactly where qsize is.
+		 *
+		 * DANOS has four classes, so the classes it does not use are
+		 * given the subport's own rate. They carry no queues and no
+		 * traffic; the value only has to be non-zero for DPDK to
+		 * accept the profile.
 		 */
 		for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++)
-			to->tc_rate[j] = from->tc_rate[j];
+			to->tc_rate[j] = from->tb_rate;
+		for (j = 0; j < QOS_TRAFFIC_CLASSES_PER_PIPE; j++)
+			to->tc_rate[qos_dpdk_tc_index(j)] = from->tc_rate[j];
 	}
 
 	if (socketid < 0) /* SOCKET_ID_ANY */

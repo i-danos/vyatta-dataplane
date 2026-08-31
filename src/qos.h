@@ -139,12 +139,12 @@ struct qos_rate_info {
 };
 
 struct qos_tc_rate_info {
-	struct qos_rate_info tc_rate[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE];
+	struct qos_rate_info tc_rate[QOS_TRAFFIC_CLASSES_PER_PIPE];
 };
 
 struct qos_shaper_conf {
 	uint64_t	tb_rate;	/* bytes/sec */
-	uint64_t	tc_rate[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE];
+	uint64_t	tc_rate[QOS_TRAFFIC_CLASSES_PER_PIPE];
 	uint32_t	tc_period;
 	uint32_t	tb_size;
 	/*
@@ -176,9 +176,9 @@ struct subport_info {
 	uint32_t vlan_id;
 	struct rte_sched_subport_stats64 queue_stats; /* Non-zeroing counts */
 	struct rte_sched_subport_stats64 clear_stats; /* Counts at last clear */
-	uint32_t qsize[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE];
+	uint32_t qsize[QOS_TRAFFIC_CLASSES_PER_PIPE];
 	enum qos_queue_size_type qsize_type;
-	struct qos_red_params red_params[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE]
+	struct qos_red_params red_params[QOS_TRAFFIC_CLASSES_PER_PIPE]
 					[RTE_COLORS];
 	bool pipe_configured[MAX_PIPES];
 	struct qos_mark_map *mark_map;
@@ -278,7 +278,7 @@ struct qos_port_params {
 	int32_t		frame_overhead;
 	uint32_t	n_subports_per_port;
 	uint32_t	n_pipes_per_subport;
-	uint32_t	qsize[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE];
+	uint32_t	qsize[QOS_TRAFFIC_CLASSES_PER_PIPE];
 	enum qos_queue_size_type qsize_type;
 };
 

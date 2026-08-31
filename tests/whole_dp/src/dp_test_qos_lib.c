@@ -1518,7 +1518,7 @@ void _dp_test_qos_attach_config_to_if(const char *if_name,
 		uint32_t tc;
 
 		for (sp = 0; sp < subports; sp++) {
-			for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE;
+			for (tc = 0; tc < QOS_TRAFFIC_CLASSES_PER_PIPE;
 			     tc++) {
 				if (!_dp_test_qos_get_json_subport_tc_no_fail
 					(if_name, sp, tc, debug, file, line)) {

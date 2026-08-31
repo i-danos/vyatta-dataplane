@@ -128,7 +128,7 @@ DP_START_TEST(qos_basic_ipv4, qos_lib_selftest)
 	json_object_put(j_obj);
 
 	/* Can we find the subport 0's tcs? */
-	for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; tc++) {
+	for (tc = 0; tc < QOS_TRAFFIC_CLASSES_PER_PIPE; tc++) {
 		j_obj = dp_test_qos_get_json_subport_tc("dp2T1", 0, tc, debug);
 		dp_test_fail_unless(j_obj != NULL,
 				    "failed to find subport 0 tc %u\n", tc);
@@ -168,7 +168,7 @@ DP_START_TEST(qos_basic_ipv4, qos_lib_selftest)
 	json_object_put(j_obj);
 
 	/* Can we find the param's tc_rates? */
-	for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; tc++) {
+	for (tc = 0; tc < QOS_TRAFFIC_CLASSES_PER_PIPE; tc++) {
 		j_obj = dp_test_qos_get_json_tc_rate("dp2T1", 0, 0, tc, debug);
 		dp_test_fail_unless(j_obj != NULL,
 				    "failed to find subport 0 pipe 0 params "
@@ -182,7 +182,7 @@ DP_START_TEST(qos_basic_ipv4, qos_lib_selftest)
 	}
 
 	/* Can we find the params wrr_weights? */
-	for (queue = 0; queue < RTE_SCHED_QUEUES_PER_PIPE; queue++) {
+	for (queue = 0; queue < QOS_QUEUES_PER_PIPE; queue++) {
 		j_obj = dp_test_qos_get_json_wrr_weight("dp2T1", 0, 0, queue,
 							debug);
 		dp_test_fail_unless(j_obj != NULL,
@@ -285,7 +285,7 @@ DP_START_TEST(qos_basic_ipv4, qos_lib_selftest)
 	}
 
 	/* Can we find the pipe's tcs? */
-	for (tc = 0; tc < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; tc++) {
+	for (tc = 0; tc < QOS_TRAFFIC_CLASSES_PER_PIPE; tc++) {
 		j_obj = dp_test_qos_get_json_pipe_tc("dp2T1", 0, 0, tc, debug);
 		dp_test_fail_unless(j_obj != NULL,
 				    "failed to find pipe 0 tc %u\n", tc);
