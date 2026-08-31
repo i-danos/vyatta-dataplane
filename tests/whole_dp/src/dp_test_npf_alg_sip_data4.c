@@ -200,6 +200,17 @@ const char *sipd4_pre_dnat[SIPD4_SZ] = {
 /*
  * SIP messages post
  */
+/*
+ * "Allow-events" is capitalised here and lower case in sipd4_pre_dnat above,
+ * deliberately. The SIP ALG round-trips the whole message through libosip2 --
+ * sip_parse.c:657 osip_message_parse(), sip_translate.c:789
+ * osip_message_to_str() -- and osip capitalises the first letter of every
+ * header name on the way out. Every other header in this data already starts
+ * with a capital, so this one line is the only place it shows.
+ *
+ * RFC 3261 7.3.1 makes field names case-insensitive, so the output is correct
+ * SIP and the input stays lower case to keep asserting that we accept it.
+ */
 const char *sipd4_post_dnat[SIPD4_SZ] = {
 	/* 0. Forward. INVITE (M1) */
 	"INVITE sip:5000@16.33.0.200:5060 SIP/2.0\r\n"
@@ -220,7 +231,7 @@ const char *sipd4_post_dnat[SIPD4_SZ] = {
 	"Max-forwards: 70\r\n"
 	"Timestamp: 1518453580\r\n"
 	"Expires: 180\r\n"
-	"allow-events: telephone-event\r\n"
+	"Allow-events: telephone-event\r\n"
 	"Content-disposition: session;handling=required\r\n"
 	"Content-Length:   279\r\n"
 	"\r\n"
@@ -246,7 +257,7 @@ const char *sipd4_post_dnat[SIPD4_SZ] = {
 	"Call-ID: 27DDA24D-F4A11E8-80CCFB84-B2765CC2@18.33.0.200\r\n"
 	"CSeq: 101 INVITE\r\n"
 	"Timestamp: 1518453580\r\n"
-	"allow-events: telephone-event\r\n"
+	"Allow-events: telephone-event\r\n"
 	"Server: Cisco-SIPGateway/IOS-16.6.1\r\n"
 	"Session-id: 00000000000000000000000000000000;"
 	"remote=7121b823d210540b859a0d21af34a724\r\n"
@@ -262,7 +273,7 @@ const char *sipd4_post_dnat[SIPD4_SZ] = {
 	"CSeq: 101 INVITE\r\n"
 	"Contact: <sip:5000@77.1.1.1:5060>\r\n"
 	"Content-Type: application/sdp\r\n"
-	"allow-events: telephone-event\r\n"
+	"Allow-events: telephone-event\r\n"
 	"P-asserted-identity: <sip:5000@16.33.0.200>\r\n"
 	"Supported: sdp-anat\r\n"
 	"Server: Cisco-SIPGateway/IOS-16.6.1\r\n"
@@ -293,7 +304,7 @@ const char *sipd4_post_dnat[SIPD4_SZ] = {
 	"CSeq: 101 INVITE\r\n"
 	"Contact: <sip:5000@77.1.1.1:5060>\r\n"
 	"Content-Type: application/sdp\r\n"
-	"allow-events: telephone-event\r\n"
+	"Allow-events: telephone-event\r\n"
 	/* Not translated, but not expected to be */
 	"P-asserted-identity: <sip:5000@16.33.0.200>\r\n"
 	"Supported: replaces\r\n"
@@ -326,7 +337,7 @@ const char *sipd4_post_dnat[SIPD4_SZ] = {
 	"Call-ID: 27DDA24D-F4A11E8-80CCFB84-B2765CC2@18.33.0.200\r\n"
 	"CSeq: 101 ACK\r\n"
 	"Max-forwards: 70\r\n"
-	"allow-events: telephone-event\r\n"
+	"Allow-events: telephone-event\r\n"
 	"Content-Length: 0\r\n"
 	"\r\n",
 
