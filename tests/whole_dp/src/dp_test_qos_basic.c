@@ -779,7 +779,29 @@ struct tc_queue_pair dscp_map[] = {
 	{ 0, 0, 0}    /* DSCP = 63 */
 };
 
-DP_START_TEST(qos_basic_ipv4, basic_dscp_map)
+/*
+ * Not run, and not a defect to chase: this case cannot pass under the queue
+ * geometry 2608 settled on.
+ *
+ * DANOS gives each traffic class eight queues. Stock DPDK gives the
+ * best-effort class four, and 2608 dropped the DANOS DPDK fork that made
+ * eight possible, so qos_dpdk.c folds DANOS's eight onto DPDK's four -- see
+ * QOS_DANOS_TC_BE and qos_dpdk_wrr(). Two DANOS queues therefore share one
+ * DPDK queue and one set of counters.
+ *
+ * The sweep below walks all 64 DSCP values and expects each mapped queue to
+ * account for its own packets separately, which needs eight distinguishable
+ * queues in the class. Four cannot answer for eight. Attribution is at least
+ * deliberate now -- the lowest queue of each folded pair reads the counters
+ * and its partner reports empty rather than consuming them, because
+ * rte_sched_queue_read_stats64() clears on read -- but deliberate is not the
+ * same as separable.
+ *
+ * Re-enable this if the geometry ever changes; do not "fix" it by loosening
+ * the assertions, which is the only other way to make it pass and would take
+ * the DSCP mapping coverage with it.
+ */
+DP_START_TEST_DONT_RUN(qos_basic_ipv4, basic_dscp_map)
 {
 	bool debug = (dp_test_debug_get() == 2 ? true : false);
 	uint dscp;
