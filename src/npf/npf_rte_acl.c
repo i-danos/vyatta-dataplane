@@ -930,7 +930,7 @@ int npf_rte_acl_init(int af, const char *name, uint32_t max_rules,
 	int err;
 
 	if (!npf_match_ctx_cnt) {
-		acl_merge_running = true;
+		__atomic_store_n(&acl_merge_running, true, __ATOMIC_RELAXED);
 		err = pthread_create(&acl_merge_tid, NULL, npf_rte_acl_optimize,
 				     NULL);
 		if (err) {
@@ -1953,6 +1953,52 @@ npf_rte_acl_free(struct rcu_head *head)
 	free(m_ctx);
 }
 
+/*
+ * Stop the optimiser thread and wait for it to actually leave.
+ *
+ * This used to be pthread_cancel(), zero the handle, carry on -- three
+ * separate problems. Nothing waited, so the thread was still running when
+ * the caller went on to free what it walks and, on the shutdown path, when
+ * rte_eal_cleanup() unmapped the hugepage holding dp_qsbr_rcu_v. Its next
+ * dp_rcu_thread_online() then wrote through a pointer into unmapped memory:
+ *
+ *   rte_rcu_qsbr_thread_online  rte_rcu_qsbr.h:310
+ *   npf_rte_acl_optimize        (inlined into the thread entry)
+ *   start_thread
+ *
+ * Cancelling was also the wrong instrument. The only cancellation point in
+ * the loop is the sleep, so the thread could be killed between
+ * dp_rcu_thread_online() and its matching offline, leaving liburcu holding a
+ * registered reader that is online and will never quiesce -- and
+ * npf_rte_acl_destroy() calls dp_rcu_synchronize() immediately afterwards.
+ *
+ * The join has to happen with this thread offline. The optimiser reaches
+ * dp_rcu_synchronize() through npf_rte_acl_trie_build(), which waits for
+ * every online reader, so a joiner that stays online is precisely the reader
+ * it waits for. Whether we are online is tested the same way liburcu's own
+ * synchronize_rcu() tests it, because the callers are on several threads --
+ * the config path through npf_ruleset.c, the crypto path through
+ * rldb_cleanup() -- and not all of them are RCU-registered.
+ */
+static void npf_rte_acl_merge_stop(void)
+{
+	pthread_t tid = acl_merge_tid;
+	bool was_online;
+
+	if (!tid)
+		return;
+
+	__atomic_store_n(&acl_merge_running, false, __ATOMIC_RELAXED);
+	acl_merge_tid = 0;
+
+	was_online = rcu_read_ongoing();
+	if (was_online)
+		dp_rcu_thread_offline();
+	pthread_join(tid, NULL);
+	if (was_online)
+		dp_rcu_thread_online();
+}
+
 int npf_rte_acl_destroy(int af __rte_unused, npf_match_ctx_t **m_ctx)
 {
 	npf_match_ctx_t *ctx = *m_ctx;
@@ -1964,11 +2010,8 @@ int npf_rte_acl_destroy(int af __rte_unused, npf_match_ctx_t **m_ctx)
 
 	npf_match_ctx_cnt--;
 
-	if (!npf_match_ctx_cnt) {
-		pthread_cancel(acl_merge_tid);
-		acl_merge_tid = 0;
-		acl_merge_running = false;
-	}
+	if (!npf_match_ctx_cnt)
+		npf_rte_acl_merge_stop();
 
 	cds_list_del_rcu(&ctx->ctx_link);
 
@@ -2063,6 +2106,17 @@ error:
 
 int npf_rte_acl_teardown(void)
 {
+	/*
+	 * Before anything is freed. This is the module's own teardown and the
+	 * only point that always runs, which is why the crash survived a fix
+	 * confined to npf_rte_acl_destroy(): that one is per-context, returns
+	 * early for a context with no tries, and depends on npf_match_ctx_cnt
+	 * reaching zero. Shutdown reaches here through rldb_cleanup() whether
+	 * or not any of that happened, so the thread has to be stopped here or
+	 * it outlives the pools it walks.
+	 */
+	npf_rte_acl_merge_stop();
+
 	if (npr_acl4_ring) {
 		npf_rte_acl_destroy_mtrie_pool(AF_INET);
 		rte_ring_free(npr_acl4_ring);
@@ -2567,6 +2621,28 @@ done:
 
 /* in milliseconds */
 #define NPF_RTE_ACL_MERGE_INTERVAL 1000
+#define NPF_RTE_ACL_MERGE_SLICE 20
+
+/*
+ * Wait out the interval between merge passes, checking for a stop request
+ * as we go.
+ *
+ * Sleeping the whole interval in one call would be simpler, but
+ * npf_rte_acl_destroy() now joins this thread, and this runs whenever the
+ * last match context of a ruleset group goes away -- not once per process.
+ * A second of latency on each of those is worth avoiding.
+ */
+static void npf_rte_acl_merge_wait(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < NPF_RTE_ACL_MERGE_INTERVAL / NPF_RTE_ACL_MERGE_SLICE;
+	     i++) {
+		if (!__atomic_load_n(&acl_merge_running, __ATOMIC_RELAXED))
+			return;
+		usleep(NPF_RTE_ACL_MERGE_SLICE * USEC_PER_MSEC);
+	}
+}
 
 static void *npf_rte_acl_optimize(void *args __rte_unused)
 {
@@ -2576,7 +2652,14 @@ static void *npf_rte_acl_optimize(void *args __rte_unused)
 
 	dp_control_thread_register();
 	dp_rcu_register_thread();
-	while (acl_merge_running) {
+	/*
+	 * Read through __atomic_load_n rather than plainly. acl_merge_running
+	 * is a file-static whose address never escapes, so the compiler is
+	 * entitled to assume usleep() cannot touch it and hoist the load out
+	 * of the loop -- which turns a stop request into an infinite loop and
+	 * the join below it into a hang.
+	 */
+	while (__atomic_load_n(&acl_merge_running, __ATOMIC_RELAXED)) {
 		dp_rcu_thread_online();
 
 		cds_list_for_each_entry_rcu(ctx, &ctx_list, ctx_link) {
@@ -2588,8 +2671,14 @@ static void *npf_rte_acl_optimize(void *args __rte_unused)
 		}
 
 		dp_rcu_thread_offline();
-		usleep(NPF_RTE_ACL_MERGE_INTERVAL * USEC_PER_MSEC);
+		npf_rte_acl_merge_wait();
 	}
+	/*
+	 * Pair dp_rcu_register_thread(). It was missing, and rcu_registered is
+	 * __thread, so every create/destroy cycle of this thread left a
+	 * liburcu reader entry and a DPDK QSBR slot behind it.
+	 */
+	dp_rcu_unregister_thread();
 	dp_control_thread_unregister();
 
 	return NULL;
