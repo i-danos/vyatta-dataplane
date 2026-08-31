@@ -496,6 +496,46 @@ static uint32_t qos_sched_subport_qsize(struct qos_port_params *pp,
 }
 
 /*
+ * Bring a queue size into the shape stock DPDK accepts.
+ *
+ * rte_sched_subport_check_params() rejects the whole subport unless every
+ * non-zero qsize is a power of two -- rte_sched.c:839, "no bigger than 32K
+ * (due to 16-bit read/write pointers)". DANOS's queue-limit is a plain count
+ * of packets or bytes and is rounded nowhere, so a configuration as ordinary
+ * as "queue-limit 100" made rte_sched_subport_config() return -EINVAL and
+ * took the entire QoS policy with it. The default is 64, which is a power of
+ * two, which is why this was not noticed.
+ *
+ * The value also used to arrive through a (uint16_t) cast, so anything at or
+ * above 65536 wrapped first: 70000 became 4464, not a power of two either,
+ * and unrelated to what was asked for.
+ *
+ * Round down, and say so. Rounding up would hand out more buffering than was
+ * configured, and rounding down is what the USEC path already does when it
+ * passes its own limits.
+ */
+#define QOS_DPDK_MAX_QSIZE 32768
+
+static uint16_t qos_dpdk_qsize(uint32_t qsize)
+{
+	uint32_t rounded;
+
+	if (qsize == 0)
+		return 0;
+
+	if (qsize > QOS_DPDK_MAX_QSIZE)
+		qsize = QOS_DPDK_MAX_QSIZE;
+
+	rounded = rte_align32prevpow2(qsize);
+	if (rounded != qsize)
+		RTE_LOG(INFO, DATAPLANE,
+			"Rounding down queue size from %u to %u\n",
+			qsize, rounded);
+
+	return (uint16_t)rounded;
+}
+
+/*
  * Bring a RED threshold into the range stock DPDK accepts.
  *
  * The DANOS DPDK fork carried rte_red_set_scaling(), called once from
@@ -830,8 +870,8 @@ int qos_dpdk_start(struct ifnet *ifp, struct sched_info *qinfo,
 			dpdk_params.qsize[i] = 0;
 		for (i = 0; i <= QOS_DANOS_TC_BE; i++)
 			dpdk_params.qsize[qos_dpdk_tc_index(i)] =
-				(uint16_t)qos_sp_qsize_get(
-					&qinfo->port_params, sinfo, i);
+				qos_dpdk_qsize(qos_sp_qsize_get(
+					&qinfo->port_params, sinfo, i));
 
 		dpdk_params.pipe_profiles = pipe_profiles;
 		dpdk_params.n_pipe_profiles =
