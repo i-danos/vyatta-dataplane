@@ -44,6 +44,21 @@ ether_forward_process(struct pl_packet *pkt, void *context __unused)
 		return ETHER_FORWARD_PPPOE_ACCEPT;
 	else if (et == htons(ETH_P_SLOW))
 		return ETHER_FORWARD_LOCAL;
+	/* 802.1X. EAPOL is terminated by hostapd in the kernel, so the frames
+	 * have to reach it. Without this they fall through to the unknown
+	 * protocol branch below -- 0x888E is well above ETH_P_802_3_MIN -- and
+	 * are dropped, counted only in ifi_unknown. Measured on the bgp
+	 * topology before this line existed: 50 EAPOL-Start frames sent at
+	 * R2.dp0s3 moved rx_non_ip from 0 to 50 and tcpdump on the kernel
+	 * device saw none of them.
+	 *
+	 * Punting is only half of 802.1X. Port authorisation -- dropping other
+	 * traffic on a port that has not authenticated -- belongs in a feature
+	 * at the ether-lookup feature point, where it can be enabled per
+	 * interface, not here in the common dispatch.
+	 */
+	else if (et == htons(ETH_P_PAE))
+		return ETHER_FORWARD_LOCAL;
 	else if (unlikely(et != htons(ETH_P_LLDP))) {
 		/* Assume 802.2 is used for IEEE control protocols */
 		if (unlikely(ntohs(et) > ETH_P_802_3_MIN)) {
