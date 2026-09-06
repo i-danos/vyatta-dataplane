@@ -26,6 +26,13 @@ enum pl_ether_lookup_fused_feat {
 	PL_ETHER_LOOKUP_FUSED_FEAT_CAPTURE = 3,
 	PL_ETHER_LOOKUP_FUSED_FEAT_PORTMONITOR = 4,
 	/* Leave a gap to allow other monitoring features */
+	/*
+	 * 802.1X port authorisation takes the top of that gap rather than a
+	 * number of its own below vlan-modify. It has to run after the
+	 * monitoring features -- a capture must still see what a blocked port
+	 * is dropping -- and before anything that forwards.
+	 */
+	PL_ETHER_LOOKUP_FUSED_FEAT_DOT1X = 9,
 	PL_ETHER_LOOKUP_FUSED_FEAT_VLAN_MOD_INGRESS = 10,
 	PL_ETHER_LOOKUP_FUSED_FEAT_BRIDGE = 11,
 	PL_ETHER_LOOKUP_FUSED_FEAT_CROSS_CONNECT = 12,
