@@ -16,6 +16,7 @@ pipeline_node_sources = files(
 	'nodes/ipv4_drop.c',
 	'nodes/ipv6_drop.c',
 	'nodes/l2_consume.c',
+	'nodes/l2_dot1x.c',
 	'nodes/l2_ether_in.c',
 	'nodes/l2_ether_forward.c',
 	'nodes/l2_ether_lookup.c',

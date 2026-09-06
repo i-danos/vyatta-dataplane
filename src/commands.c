@@ -1854,6 +1854,7 @@ static const cmd_t cmd_table[] = {
 	{ 0,	"cpu",		cmd_cpu,	"Show CPU load" },
 	{ 1,	"debug",	cmd_debug,	"Debug logging level" },
 	{ 0,	"ecmp",		cmd_ecmp,	"Show/set ecmp options" },
+	{ 0,	"dot1x",	cmd_dot1x,	"802.1X port authorisation" },
 	{ 0,	"fal",		cmd_fal,	"FAL debugging commands" },
 	{ 1,    "gpc",          cmd_gpc_op,     "GPC OP mode information" },
 	{ 0,	"gre",		cmd_gre,	"Show gre information" },

@@ -128,7 +128,21 @@ PL_REGISTER_FEATURE(vlan_mod_in_feat) = {
 	.node_name = "vlan-modify-in",
 	.feature_point = "ether-lookup",
 	.id = PL_ETHER_LOOKUP_FUSED_FEAT_VLAN_MOD_INGRESS,
-	.visit_after = "portmonitor-in",
+	/*
+	 * Was "portmonitor-in". 802.1X port authorisation was inserted
+	 * between the two: it must run after the monitoring features, so a
+	 * capture still sees what a blocked port drops, and before anything
+	 * that forwards.
+	 *
+	 * The chain has to be edited rather than both features naming the
+	 * same predecessor. pl_gen_fused supports only one feature visiting
+	 * after a given feature -- "features[feature.visit_after].next_feature
+	 * = feature" simply overwrites -- and the loser is also removed from
+	 * head_features, so it vanishes from the generated switch with no
+	 * warning. It then runs only through the dynamic default branch,
+	 * out of the declared order.
+	 */
+	.visit_after = "dot1x-ether-in",
 };
 
 /* Register Node */
