@@ -1,0 +1,28 @@
+// Copyright (c) 2026, i-danos.
+//
+// SPDX-License-Identifier: LGPL-2.1-only
+//
+// IEEE 802.1X port authorisation.
+//
+// Configuration only. This says whether a port is configured for 802.1X, which
+// is what belongs in vplaned's store and must survive a dataplane restart.
+//
+// Authorisation -- whether the port has authenticated -- is deliberately not
+// here. It is runtime state driven by the authenticator's events, and after a
+// restart the port has to come back unauthorised and authenticate again rather
+// than resume forwarding on the strength of an authentication the new dataplane
+// instance never saw. Putting it in the store would make the wrong thing
+// survive.
+
+syntax="proto2";
+
+option go_package = "github.com/danos/vyatta-dataplane/protobuf/go/Dot1xConfig";
+
+message Dot1xConfig {
+	enum CommandType {
+		ENABLE  = 0;
+		DISABLE = 1;
+	}
+	optional CommandType cmd = 1;
+	optional string if_name  = 2;
+}

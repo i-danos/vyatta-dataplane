@@ -64,7 +64,10 @@
 #include "pl_common.h"
 #include "pl_fused.h"
 #include "pl_node.h"
+#include "protobuf.h"
+#include "protobuf/Dot1xConfig.pb-c.h"
 #include "urcu.h"
+#include "vplane_log.h"
 
 ALWAYS_INLINE unsigned int
 dot1x_in_process(struct pl_packet *pkt, void *context __unused)
@@ -185,6 +188,83 @@ static int dot1x_show(FILE *f, const char *ifname)
 
 	return 0;
 }
+
+/*
+ * Configuration arrives as a protobuf command, not as text.
+ *
+ * These are two registries and only one of them is reached from vplaned.
+ * cmd_table in commands.c is the console registry, which is where the text
+ * commands below live; configuration replayed from the store is dispatched by
+ * topic, and a command registered only in cmd_table is an unknown topic there.
+ *
+ * That failure is worth knowing about: the store accepts anything, so the
+ * component that sent it sees success, and the dataplane then rejects the topic
+ * on every resync -- "unknown topic", resync aborts, RESET, reconnect, forever.
+ * systemctl still reports the dataplane active and there is no core dump. One
+ * bad entry takes a router out.
+ *
+ * dp_feature_register_string_cfg_handler() would register a text config handler
+ * and its own header marks it deprecated in favour of protobuf, so this is the
+ * protobuf one.
+ */
+static int cmd_dot1x_cfg(struct pb_msg *msg)
+{
+	Dot1xConfig *cfg = dot1x_config__unpack(NULL, msg->msg_len,
+						(void *)msg->msg);
+	struct ifnet *ifp;
+	int ret = -1;
+
+	if (!cfg) {
+		RTE_LOG(ERR, DATAPLANE,
+			"failed to read dot1x protobuf command\n");
+		return -1;
+	}
+
+	if (!cfg->has_cmd || !cfg->if_name) {
+		RTE_LOG(ERR, DATAPLANE, "dot1x: incomplete command\n");
+		goto out;
+	}
+
+	ifp = dp_ifnet_byifname(cfg->if_name);
+	if (!ifp) {
+		/* Replay can arrive before the interface exists. Reporting it
+		 * rather than failing silently: the caller cannot see this and
+		 * the port would simply never be configured.
+		 */
+		RTE_LOG(ERR, DATAPLANE, "dot1x: no interface %s\n",
+			cfg->if_name);
+		goto out;
+	}
+
+	switch (cfg->cmd) {
+	case DOT1X_CONFIG__COMMAND_TYPE__ENABLE:
+		/* Always unauthorised on enable, including on a replay after a
+		 * dataplane restart. Fail closed.
+		 */
+		ifp->if_dot1x_authorized = 0;
+		pl_node_add_feature_by_inst(&dot1x_ether_in_feat, ifp);
+		ret = 0;
+		break;
+	case DOT1X_CONFIG__COMMAND_TYPE__DISABLE:
+		pl_node_remove_feature_by_inst(&dot1x_ether_in_feat, ifp);
+		ifp->if_dot1x_authorized = 0;
+		ret = 0;
+		break;
+	default:
+		RTE_LOG(ERR, DATAPLANE, "dot1x: unknown command %d\n",
+			cfg->cmd);
+		break;
+	}
+
+out:
+	dot1x_config__free_unpacked(cfg, NULL);
+	return ret;
+}
+
+PB_REGISTER_CMD(dot1x_cfg_cmd) = {
+	.cmd = "vyatta:dot1x",
+	.handler = cmd_dot1x_cfg,
+};
 
 /*
  * dot1x enable      <interface>   configure 802.1X; port starts unauthorised
