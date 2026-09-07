@@ -10,20 +10,31 @@
  * Blocks a port that has not authenticated, letting only EAPOL through so that
  * it can.
  *
- * The state is the feature's own attachment rather than a flag somewhere:
+ * Two pieces of state, and keeping them apart is the whole design:
  *
- *   attached  the port is unauthorised -- everything but EAPOL is dropped
- *   detached  the port is authorised, or 802.1X is not configured on it
+ *   feature attached          the port is configured for 802.1X
+ *   ifp->if_dot1x_authorized  it has authenticated
  *
- * That choice is what keeps this free. An authorised port has no feature in its
- * ether-lookup chain at all, so it costs nothing -- not a branch, not a load --
- * which matters on a path that runs per packet per core. It is also already
- * observable: "vplsh -l -c 'ifconfig <if>'" lists what is attached under
- * ether_lookup_features, so the blocked state needs no new counter or field to
- * be visible.
+ * An earlier version used attachment alone and was wrong: it could not express
+ * "configured but not yet authenticated", which is the state the feature
+ * exists to enforce. It also put authorisation on the configuration path,
+ * where it does not belong.
  *
- * Where it sits in the chain is deliberate. After the monitoring features, so a
- * capture or port mirror still sees the frames being dropped -- a port that
+ * The split follows what each thing is. Attachment is configuration: it goes
+ * through vplaned's store, so it survives a dataplane restart and a port
+ * configured for 802.1X comes back configured. Authorisation is runtime and is
+ * deliberately NOT stored -- after a restart the port must come back
+ * unauthorised and authenticate again, rather than resume forwarding on the
+ * strength of an authentication the new dataplane instance never saw. Failing
+ * closed is the only safe direction here.
+ *
+ * A port with no 802.1X has no feature in its ether-lookup chain at all, so it
+ * costs nothing -- not a branch, not a load -- on a path that runs per packet
+ * per core. A configured port costs one bit test, from a cacheline the ingress
+ * path already reads.
+ *
+ * Where it sits in the chain is deliberate. After the monitoring features, so
+ * a capture or port mirror still sees the frames being dropped -- a port that
  * blocks traffic invisibly is very hard to diagnose. Before vlan-modify-in and
  * bridge-in, so nothing is forwarded, bridged or cross-connected off an
  * unauthorised port.
@@ -58,13 +69,19 @@
 ALWAYS_INLINE unsigned int
 dot1x_in_process(struct pl_packet *pkt, void *context __unused)
 {
-	const struct rte_ether_hdr *eth = ethhdr(pkt->mbuf);
+	struct ifnet *ifp = pkt->in_ifp;
+	const struct rte_ether_hdr *eth;
+
+	/* The common case on a working port: authenticated, forward. */
+	if (likely(ifp->if_dot1x_authorized))
+		return DOT1X_IN_ACCEPT;
 
 	/* Authentication has to be able to happen on a blocked port. */
+	eth = ethhdr(pkt->mbuf);
 	if (eth->ether_type == htons(ETH_P_PAE))
 		return DOT1X_IN_ACCEPT;
 
-	if_incr_dropped(pkt->in_ifp);
+	if_incr_dropped(ifp);
 	return DOT1X_IN_DROP;
 }
 
@@ -87,7 +104,11 @@ PL_REGISTER_FEATURE(dot1x_ether_in_feat) = {
 	.visit_after = "portmonitor-in",
 };
 
-static int dot1x_set(FILE *f, const char *ifname, bool block)
+/*
+ * Configuration. Reaches the dataplane through vplaned's store, so it survives
+ * a restart. Enabling always leaves the port unauthorised: fail closed.
+ */
+static int dot1x_enable(FILE *f, const char *ifname, bool enable)
 {
 	struct ifnet *ifp = dp_ifnet_byifname(ifname);
 
@@ -96,23 +117,51 @@ static int dot1x_set(FILE *f, const char *ifname, bool block)
 		return -1;
 	}
 
-	if (block)
+	if (enable) {
+		ifp->if_dot1x_authorized = 0;
 		pl_node_add_feature_by_inst(&dot1x_ether_in_feat, ifp);
-	else
+	} else {
 		pl_node_remove_feature_by_inst(&dot1x_ether_in_feat, ifp);
+		ifp->if_dot1x_authorized = 0;
+	}
 
+	return 0;
+}
+
+/*
+ * Runtime. Driven by whatever is watching the authenticator, and not stored:
+ * a restart has to leave the port unauthorised.
+ */
+static int dot1x_authorize(FILE *f, const char *ifname, bool authorized)
+{
+	struct ifnet *ifp = dp_ifnet_byifname(ifname);
+
+	if (!ifp) {
+		fprintf(f, "unknown interface: %s\n", ifname);
+		return -1;
+	}
+
+	if (!pl_node_is_feature_enabled_by_inst(&dot1x_ether_in_feat, ifp)) {
+		fprintf(f, "802.1X is not enabled on %s\n", ifname);
+		return -1;
+	}
+
+	ifp->if_dot1x_authorized = authorized ? 1 : 0;
 	return 0;
 }
 
 static int dot1x_show(FILE *f, const char *ifname)
 {
 	struct ifnet *ifp = dp_ifnet_byifname(ifname);
+	bool enabled;
 	json_writer_t *wr;
 
 	if (!ifp) {
 		fprintf(f, "unknown interface: %s\n", ifname);
 		return -1;
 	}
+
+	enabled = pl_node_is_feature_enabled_by_inst(&dot1x_ether_in_feat, ifp);
 
 	wr = jsonw_new(f);
 	if (!wr)
@@ -121,9 +170,16 @@ static int dot1x_show(FILE *f, const char *ifname)
 	jsonw_name(wr, "dot1x");
 	jsonw_start_object(wr);
 	jsonw_string_field(wr, "interface", ifname);
-	jsonw_bool_field(wr, "blocked",
-			 pl_node_is_feature_enabled_by_inst(
-				 &dot1x_ether_in_feat, ifp));
+	jsonw_bool_field(wr, "enabled", enabled);
+	jsonw_bool_field(wr, "authorized",
+			 enabled && ifp->if_dot1x_authorized);
+	/* What the forwarding path actually does, so a reader need not
+	 * derive it from the two flags above.
+	 */
+	jsonw_string_field(wr, "port_state",
+			   !enabled ? "unconfigured" :
+			   ifp->if_dot1x_authorized ? "forwarding" :
+			   "blocked-except-eapol");
 	jsonw_end_object(wr);
 	jsonw_destroy(&wr);
 
@@ -131,24 +187,33 @@ static int dot1x_show(FILE *f, const char *ifname)
 }
 
 /*
- * dot1x block   <interface>   port is unauthorised: drop all but EAPOL
- * dot1x unblock <interface>   port is authorised: forward normally
- * dot1x show    <interface>
+ * dot1x enable      <interface>   configure 802.1X; port starts unauthorised
+ * dot1x disable     <interface>   remove it
+ * dot1x authorize   <interface>   authentication succeeded
+ * dot1x unauthorize <interface>   session ended or failed
+ * dot1x show        <interface>
  */
 int cmd_dot1x(FILE *f, int argc, char **argv)
 {
+	static const char usage[] =
+		"usage: dot1x {enable|disable|authorize|unauthorize|show} <interface>\n";
+
 	if (argc != 3) {
-		fprintf(f, "usage: dot1x {block|unblock|show} <interface>\n");
+		fprintf(f, "%s", usage);
 		return -1;
 	}
 
-	if (strcmp(argv[1], "block") == 0)
-		return dot1x_set(f, argv[2], true);
-	if (strcmp(argv[1], "unblock") == 0)
-		return dot1x_set(f, argv[2], false);
+	if (strcmp(argv[1], "enable") == 0)
+		return dot1x_enable(f, argv[2], true);
+	if (strcmp(argv[1], "disable") == 0)
+		return dot1x_enable(f, argv[2], false);
+	if (strcmp(argv[1], "authorize") == 0)
+		return dot1x_authorize(f, argv[2], true);
+	if (strcmp(argv[1], "unauthorize") == 0)
+		return dot1x_authorize(f, argv[2], false);
 	if (strcmp(argv[1], "show") == 0)
 		return dot1x_show(f, argv[2]);
 
-	fprintf(f, "usage: dot1x {block|unblock|show} <interface>\n");
+	fprintf(f, "%s", usage);
 	return -1;
 }
