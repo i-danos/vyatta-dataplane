@@ -314,7 +314,22 @@ struct ifnet {
 			   hw_forwarding:1, /* switch port hw fwded */
 			   if_broken_out:1, /* broken out into separate ifs */
 			   if_pause:2, /* pause_frame mode */
-			   spare1:1;
+			   /*
+			    * 802.1X authorisation state. Distinct from whether
+			    * the dot1x feature is attached: attached means the
+			    * port is configured for 802.1X, this says whether it
+			    * has authenticated. Two states, so one is not enough.
+			    *
+			    * Runtime, not configuration. It is deliberately not
+			    * in vplaned's store: after a dataplane restart the
+			    * port must come back unauthorised and authenticate
+			    * again, not resume forwarding on the strength of an
+			    * authentication the new instance never saw.
+			    *
+			    * Here rather than in feature storage because this
+			    * cacheline is already read on the ingress path.
+			    */
+			   if_dot1x_authorized:1;
 
 	int8_t		   if_socket;	/* NUMA node (or -1 for ANY) */
 
