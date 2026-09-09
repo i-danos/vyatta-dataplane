@@ -2061,6 +2061,36 @@ gre_tunnel_encap(struct ifnet *input_ifp, struct ifnet *tunnel_ifp,
 			/* Set rt_info to used since the last timer reset */
 			CMM_ACCESS_ONCE(rt_info->rt_info_bits) |=
 							RT_INFO_BIT_IS_USED;
+		} else if (pktmbuf_mdata_exists(m, PKT_MDATA_FROM_US)) {
+			/*
+			 * No peer for this tunnel address, and this packet came
+			 * from the kernel in the first place -- shadow.c marks
+			 * everything it reads off .spathintf as FROM_US.
+			 *
+			 * Punting to the kernel is the right answer for a
+			 * packet off the forwarding path: nhrpd sees it and
+			 * starts resolution, which is how the peer gets
+			 * created. Doing it to a packet the kernel just handed
+			 * us only hands it straight back, and it dies there
+			 * having moved no counter on either side.
+			 *
+			 * That is where NHRP registration ends up. nhrpd sends
+			 * its bootstrap registrations through AF_PACKET with
+			 * the NBMA in the link-layer destination, deliberately
+			 * bypassing the neighbour table -- the neighbour entry
+			 * being the thing NHRP exists to create -- and the mGRE
+			 * peer table here is populated from exactly those
+			 * neighbour messages (mgre_newneigh). So the lookup
+			 * above cannot succeed until the registration it is
+			 * blocking has succeeded.
+			 *
+			 * Counting it does not break that circle. It makes the
+			 * circle visible, which measuring .spathintf in both
+			 * directions was otherwise the only way to see. See
+			 * toolkit/docs/DEFECT-nhrp-mgre-slowpath.md.
+			 */
+			if_incr_oerror(tunnel_ifp);
+			goto drop;
 		} else {
 			goto slow_path;
 		}
@@ -2072,20 +2102,16 @@ gre_tunnel_encap(struct ifnet *input_ifp, struct ifnet *tunnel_ifp,
 		 * A multipoint tunnel reaching here has no peer to send to.
 		 * Its own header carries no destination -- "gre remote any" --
 		 * so encapsulating with it produces an outer packet addressed
-		 * to 0.0.0.0, which is transmitted and goes nowhere.
-		 *
-		 * That silence cost a long diagnosis. NHRP registration over
-		 * mGRE fails exactly here: nhrpd sends its bootstrap packets
-		 * through AF_PACKET with the NBMA in the link-layer
-		 * destination, bypassing the neighbour table on purpose, so
-		 * shadow.c has no mark to take an NBMA from and passes
-		 * nxt_ip == NULL. Nothing was logged and no counter moved, so
-		 * the fault read as a daemon fault for a long time. See
-		 * toolkit/docs/DEFECT-nhrp-mgre-slowpath.md.
+		 * to 0.0.0.0, which is built and goes nowhere, silently.
 		 *
 		 * The test is the destination rather than scg_multipoint alone:
 		 * the tunnel model does not forbid a remote-ip on a multipoint
 		 * tunnel, and where one is set this header is usable.
+		 *
+		 * This branch is not where NHRP registration fails -- an
+		 * earlier version of this comment said it was, and measuring
+		 * disproved it. nxt_ip is not NULL there; see the slow_path
+		 * case below.
 		 */
 		if (sc->scg_multipoint && outer_ip->daddr == INADDR_ANY) {
 			if_incr_oerror(tunnel_ifp);
