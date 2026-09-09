@@ -211,10 +211,23 @@ static int dot1x_show(FILE *f, const char *ifname)
 	 */
 	if (enabled && ifp->if_dot1x_authorized &&
 	    !rte_is_zero_ether_addr(&ifp->if_dot1x_station)) {
-		char buf[32];
+		const uint8_t *a = ifp->if_dot1x_station.addr_bytes;
+		char buf[18];
 
-		jsonw_string_field(wr, "authenticated_station",
-				   ether_ntoa_r(&ifp->if_dot1x_station, buf));
+		/*
+		 * Two digits per octet, written out here rather than with
+		 * ether_ntoa_r(), which emits the shortest form and drops
+		 * leading zeros: 52:54:00:01:09:01 comes back as 52:54:0:1:9:1.
+		 * That still looks like an address, so it reads as correct, but
+		 * the YANG type is types:mac-address and its pattern requires
+		 * [0-9a-fA-F]{2} per octet -- configd rejected the state with
+		 * "Does not match pattern" and the leaf never reached the
+		 * model. ether_ntoa_r is fine for the log lines that use it
+		 * elsewhere; this field is validated.
+		 */
+		snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x",
+			 a[0], a[1], a[2], a[3], a[4], a[5]);
+		jsonw_string_field(wr, "authenticated_station", buf);
 	}
 	jsonw_end_object(wr);
 	jsonw_destroy(&wr);
