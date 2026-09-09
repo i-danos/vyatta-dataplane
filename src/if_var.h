@@ -363,7 +363,26 @@ struct ifnet {
 			   hw_capturing : 1,  /* Hardware capture enabled */
 			   spare2: 1,
 			   spare3: 1;
-	uint8_t		   pad[7];
+	uint8_t		   pad[1];
+
+	/*
+	 * 802.1X: the station whose authentication authorised this port.
+	 *
+	 * It belongs with if_dot1x_authorized rather than with hostapd, because
+	 * it is an attribute of the authorisation and not of hostapd's current
+	 * session list -- restarting hostapd empties that list while the port
+	 * stays authorised, which would report a forwarding port with no
+	 * station. Set and cleared on the same path as the bit, so the two
+	 * cannot disagree. All-zero when the port is not authorised.
+	 *
+	 * Down here rather than beside the bit on purpose: the bit is read per
+	 * packet, this is read only by "dot1x show". Placing it in the seven
+	 * bytes of padding that were already here keeps sizeof(struct ifnet)
+	 * and every cacheline boundary above unchanged -- nothing asserts them,
+	 * so growing the struct would move them silently.
+	 */
+	struct rte_ether_addr if_dot1x_station;
+
 	fal_object_t       fal_l3;
 
 	/* Software statistics */

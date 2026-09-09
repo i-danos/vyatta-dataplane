@@ -122,10 +122,14 @@ static int dot1x_enable(FILE *f, const char *ifname, bool enable)
 
 	if (enable) {
 		ifp->if_dot1x_authorized = 0;
+		memset(&ifp->if_dot1x_station, 0,
+		       sizeof(ifp->if_dot1x_station));
 		pl_node_add_feature_by_inst(&dot1x_ether_in_feat, ifp);
 	} else {
 		pl_node_remove_feature_by_inst(&dot1x_ether_in_feat, ifp);
 		ifp->if_dot1x_authorized = 0;
+		memset(&ifp->if_dot1x_station, 0,
+		       sizeof(ifp->if_dot1x_station));
 	}
 
 	return 0;
@@ -135,9 +139,11 @@ static int dot1x_enable(FILE *f, const char *ifname, bool enable)
  * Runtime. Driven by whatever is watching the authenticator, and not stored:
  * a restart has to leave the port unauthorised.
  */
-static int dot1x_authorize(FILE *f, const char *ifname, bool authorized)
+static int dot1x_authorize(FILE *f, const char *ifname, bool authorized,
+			   const char *station)
 {
 	struct ifnet *ifp = dp_ifnet_byifname(ifname);
+	struct rte_ether_addr mac;
 
 	if (!ifp) {
 		fprintf(f, "unknown interface: %s\n", ifname);
@@ -147,6 +153,21 @@ static int dot1x_authorize(FILE *f, const char *ifname, bool authorized)
 	if (!pl_node_is_feature_enabled_by_inst(&dot1x_ether_in_feat, ifp)) {
 		fprintf(f, "802.1X is not enabled on %s\n", ifname);
 		return -1;
+	}
+
+	/*
+	 * The station is optional. An authorise without one still authorises --
+	 * refusing would make a port that authenticated fail to forward because
+	 * of a reporting detail, which is the wrong trade. The address is then
+	 * left all-zero and "dot1x show" omits it.
+	 */
+	memset(&ifp->if_dot1x_station, 0, sizeof(ifp->if_dot1x_station));
+	if (authorized && station) {
+		if (ether_aton_r(station, &mac))
+			ifp->if_dot1x_station = mac;
+		else
+			fprintf(f, "ignoring malformed station address: %s\n",
+				station);
 	}
 
 	ifp->if_dot1x_authorized = authorized ? 1 : 0;
@@ -183,6 +204,18 @@ static int dot1x_show(FILE *f, const char *ifname)
 			   !enabled ? "unconfigured" :
 			   ifp->if_dot1x_authorized ? "forwarding" :
 			   "blocked-except-eapol");
+	/*
+	 * Only while the port is authorised, and only if one was supplied.
+	 * Emitting an all-zero address would read as a station that
+	 * authenticated from 00:00:00:00:00:00.
+	 */
+	if (enabled && ifp->if_dot1x_authorized &&
+	    !rte_is_zero_ether_addr(&ifp->if_dot1x_station)) {
+		char buf[32];
+
+		jsonw_string_field(wr, "authenticated_station",
+				   ether_ntoa_r(&ifp->if_dot1x_station, buf));
+	}
 	jsonw_end_object(wr);
 	jsonw_destroy(&wr);
 
@@ -242,12 +275,16 @@ static int cmd_dot1x_cfg(struct pb_msg *msg)
 		 * dataplane restart. Fail closed.
 		 */
 		ifp->if_dot1x_authorized = 0;
+		memset(&ifp->if_dot1x_station, 0,
+		       sizeof(ifp->if_dot1x_station));
 		pl_node_add_feature_by_inst(&dot1x_ether_in_feat, ifp);
 		ret = 0;
 		break;
 	case DOT1X_CONFIG__COMMAND_TYPE__DISABLE:
 		pl_node_remove_feature_by_inst(&dot1x_ether_in_feat, ifp);
 		ifp->if_dot1x_authorized = 0;
+		memset(&ifp->if_dot1x_station, 0,
+		       sizeof(ifp->if_dot1x_station));
 		ret = 0;
 		break;
 	default:
@@ -269,16 +306,22 @@ PB_REGISTER_CMD(dot1x_cfg_cmd) = {
 /*
  * dot1x enable      <interface>   configure 802.1X; port starts unauthorised
  * dot1x disable     <interface>   remove it
- * dot1x authorize   <interface>   authentication succeeded
+ * dot1x authorize   <interface> [<station-mac>]  authentication succeeded
  * dot1x unauthorize <interface>   session ended or failed
  * dot1x show        <interface>
  */
 int cmd_dot1x(FILE *f, int argc, char **argv)
 {
 	static const char usage[] =
-		"usage: dot1x {enable|disable|authorize|unauthorize|show} <interface>\n";
+		"usage: dot1x {enable|disable|unauthorize|show} <interface>\n"
+		"       dot1x authorize <interface> [<station-mac>]\n";
 
-	if (argc != 3) {
+	if (argc < 3 || argc > 4) {
+		fprintf(f, "%s", usage);
+		return -1;
+	}
+
+	if (argc == 4 && strcmp(argv[1], "authorize") != 0) {
 		fprintf(f, "%s", usage);
 		return -1;
 	}
@@ -288,9 +331,10 @@ int cmd_dot1x(FILE *f, int argc, char **argv)
 	if (strcmp(argv[1], "disable") == 0)
 		return dot1x_enable(f, argv[2], false);
 	if (strcmp(argv[1], "authorize") == 0)
-		return dot1x_authorize(f, argv[2], true);
+		return dot1x_authorize(f, argv[2], true,
+				       argc == 4 ? argv[3] : NULL);
 	if (strcmp(argv[1], "unauthorize") == 0)
-		return dot1x_authorize(f, argv[2], false);
+		return dot1x_authorize(f, argv[2], false, NULL);
 	if (strcmp(argv[1], "show") == 0)
 		return dot1x_show(f, argv[2]);
 
