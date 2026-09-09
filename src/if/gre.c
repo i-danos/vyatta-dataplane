@@ -2067,6 +2067,30 @@ gre_tunnel_encap(struct ifnet *input_ifp, struct ifnet *tunnel_ifp,
 	} else {
 		outer_ip = &greinfo->iph;
 		t_vrfid = greinfo->t_vrfid;
+
+		/*
+		 * A multipoint tunnel reaching here has no peer to send to.
+		 * Its own header carries no destination -- "gre remote any" --
+		 * so encapsulating with it produces an outer packet addressed
+		 * to 0.0.0.0, which is transmitted and goes nowhere.
+		 *
+		 * That silence cost a long diagnosis. NHRP registration over
+		 * mGRE fails exactly here: nhrpd sends its bootstrap packets
+		 * through AF_PACKET with the NBMA in the link-layer
+		 * destination, bypassing the neighbour table on purpose, so
+		 * shadow.c has no mark to take an NBMA from and passes
+		 * nxt_ip == NULL. Nothing was logged and no counter moved, so
+		 * the fault read as a daemon fault for a long time. See
+		 * toolkit/docs/DEFECT-nhrp-mgre-slowpath.md.
+		 *
+		 * The test is the destination rather than scg_multipoint alone:
+		 * the tunnel model does not forbid a remote-ip on a multipoint
+		 * tunnel, and where one is set this header is usable.
+		 */
+		if (sc->scg_multipoint && outer_ip->daddr == INADDR_ANY) {
+			if_incr_oerror(tunnel_ifp);
+			goto drop;
+		}
 	}
 	/*
 	 * TODO - support sequencing and checksum, as it stands these
