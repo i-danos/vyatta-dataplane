@@ -52,6 +52,7 @@
 #include "if/gre.h"
 #include "if/vxlan.h"
 #include "if_var.h"
+#include "if_ether.h"
 #include "json_writer.h"
 #include "main.h"
 #include "mstp.h"
@@ -737,6 +738,90 @@ void bridge_update(const char *ifname, struct nl_bridge_info *br_info)
 		sc->scbr_vlan_default_pvid = br_info->br_vlan_default_pvid;
 }
 
+/*
+ * Report a locally learned MAC to the kernel bridge FDB, or withdraw it.
+ *
+ * Learning happens in the dataplane and stops there. That is right for
+ * forwarding and wrong for anything that reads the kernel, and one thing does:
+ * zebra decides which local MACs to advertise as EVPN type-2 routes by reading
+ * the kernel FDB. Without this the far end never learns a MAC that this bridge
+ * knows perfectly well -- "show evpn vni" reports 0 MACs while scbr_rthash
+ * holds them, and an EVPN-VXLAN service silently carries nothing.
+ *
+ * The message is the one "bridge fdb add <mac> dev <port> master" sends:
+ * AF_BRIDGE, the port's ifindex, and NTF_MASTER so the kernel files it against
+ * the bridge rather than as a device address.
+ *
+ * Failure is logged once and otherwise ignored. This is a reporting path; the
+ * dataplane forwards correctly whether or not the kernel is listening, and
+ * failing forwarding over a notification would be the wrong trade.
+ */
+static void bridge_kernel_fdb(const struct bridge_rtnode *brt, bool add)
+{
+	struct mnl_socket *nl = kernel_netlink_sock();
+	static unsigned int seq;
+	struct ifnet *ifp;
+	int rv;
+	struct {
+		struct nlmsghdr n;
+		struct ndmsg    ndm;
+		char            buf[128];
+	} req = {
+		.n.nlmsg_len   = NLMSG_LENGTH(sizeof(struct ndmsg)),
+		.n.nlmsg_type  = add ? RTM_NEWNEIGH : RTM_DELNEIGH,
+		.n.nlmsg_flags = NLM_F_REQUEST |
+				 (add ? (NLM_F_CREATE | NLM_F_REPLACE) : 0),
+		.ndm.ndm_family = AF_BRIDGE,
+		.ndm.ndm_state  = NUD_REACHABLE,
+		.ndm.ndm_flags  = NTF_MASTER,
+	};
+
+	if (!nl)
+		return;
+
+	ifp = rcu_dereference(brt->brt_difp);
+	if (!ifp)
+		return;
+
+	req.n.nlmsg_seq = ++seq;
+	req.ndm.ndm_ifindex = ifp->if_index;
+	mnl_attr_put(&req.n, NDA_LLADDR, RTE_ETHER_ADDR_LEN,
+		     &brt->brt_key.addr);
+	if (brt->brt_key.vlan)
+		mnl_attr_put_u16(&req.n, NDA_VLAN, brt->brt_key.vlan);
+
+	rv = mnl_socket_sendto(nl, &req.n, req.n.nlmsg_len);
+	if (rv < 0)
+		DP_DEBUG(BRIDGE, ERR, BRIDGE,
+			 "failed to %s %s in the kernel FDB on %s: %s\n",
+			 add ? "add" : "remove",
+			 ether_ntoa(&brt->brt_key.addr), ifp->if_name,
+			 strerror(errno));
+}
+
+/*
+ * Does anything read this bridge's kernel FDB?
+ *
+ * Only a VXLAN member makes that true today: it is what puts zebra in the
+ * picture, because zebra derives a VNI from a VXLAN interface and then wants
+ * the local MACs behind it. Reporting for every bridge would add kernel FDB
+ * churn that nothing reads.
+ */
+static bool bridge_needs_kernel_fdb(struct bridge_softc *sc)
+{
+	struct cds_list_head *entry;
+	struct bridge_port *port;
+
+	bridge_for_each_brport(port, entry, sc) {
+		struct ifnet *ifp = bridge_port_get_interface(port);
+
+		if (ifp && ifp->if_type == IFT_VXLAN)
+			return true;
+	}
+
+	return false;
+}
+
 /* Should route entry be expired?
  * For dynamic entries only, check if it has been used.
  *  for more than BRIDGE_RTABLE_EXPIRE intervals.
@@ -768,10 +853,29 @@ static void bridge_timer(struct rte_timer *timer __rte_unused,
 	struct cds_lfht_iter iter;
 	struct bridge_rtnode *brt;
 
+	bool report = bridge_needs_kernel_fdb(sc);
+
 	dp_rcu_read_lock();
 	cds_lfht_for_each_entry(sc->scbr_rthash, &iter, brt, brt_node) {
-		if (bridge_rtexpired(brt, sc->scbr_ageing_ticks))
+		if (bridge_rtexpired(brt, sc->scbr_ageing_ticks)) {
+			if (brt->brt_kernel_synced)
+				bridge_kernel_fdb(brt, false);
 			bridge_rtnode_destroy(sc->scbr_rthash, brt);
+			continue;
+		}
+
+		/*
+		 * Reporting from the timer rather than from bridge_rtupdate()
+		 * is the point: learning runs per packet per core and must not
+		 * make a syscall. Two seconds of latency before a MAC is
+		 * advertised is immaterial to EVPN, which takes longer than
+		 * that to converge anyway.
+		 */
+		if (report && !brt->brt_kernel_synced &&
+		    (brt->brt_flags & IFBAF_TYPEMASK) == IFBAF_DYNAMIC) {
+			bridge_kernel_fdb(brt, true);
+			brt->brt_kernel_synced = true;
+		}
 	}
 	dp_rcu_read_unlock();
 }

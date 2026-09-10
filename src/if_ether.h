@@ -40,6 +40,14 @@ void ll_addr_set(struct llentry *lle, const struct rte_ether_addr *eth);
 void llentry_routing_install(struct llentry *lle);
 void kernel_mark_neigh_reachable(const struct sockaddr *addr, uint32_t ifindex);
 void kernel_neigh_netlink_sock_init(void);
+
+/*
+ * The socket this file opens to talk to the kernel, for other callers that
+ * need to tell the kernel something rather than open a second one. NULL if it
+ * could not be opened; every caller has to cope with that, because the
+ * dataplane forwards perfectly well without it.
+ */
+struct mnl_socket *kernel_netlink_sock(void);
 void kernel_neigh_netlink_sock_close(void);
 void lladdr_ulr_update(struct ifnet *ifp, struct in_addr *addr, const bool confirmed);
 const char *lladdr_ntop(struct llentry *la);
