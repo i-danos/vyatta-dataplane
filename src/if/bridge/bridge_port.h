@@ -108,6 +108,28 @@ void bridge_port_set_pvid(struct bridge_port *port, uint16_t vlan);
 uint16_t bridge_port_get_pvid(struct bridge_port *port);
 
 /*
+ * Split horizon.
+ *
+ * A frame received on a port whose group is non-zero is not forwarded out
+ * another port in the same group, unless the group allows its members to reach
+ * each other. Group 0 means unrestricted.
+ *
+ * Private VLAN's port roles are expressed in these two values:
+ *
+ *   promiscuous   group 0
+ *   isolated      group N, intra_allow false
+ *   community N   group N, intra_allow true
+ *
+ * intra_allow is a property of the group; configuration must set it the same
+ * on every port of a group, or forwarding between two of its members becomes
+ * asymmetric. The check reads the ingress port's copy.
+ */
+void bridge_port_set_horizon(struct bridge_port *port, uint16_t group,
+			     bool intra_allow);
+uint16_t bridge_port_get_horizon_group(struct bridge_port *port);
+bool bridge_port_get_horizon_intra_allow(struct bridge_port *port);
+
+/*
  * The following functions manipulate the untag VLAN list for egress traffic.
  * If a VLAN belongs to this list it will be removed from the frame on egress
  * from the bridge code.

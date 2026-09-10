@@ -68,6 +68,8 @@
 #include "pl_fused.h"
 #include "pktmbuf_internal.h"
 #include "pl_node.h"
+#include "protobuf.h"
+#include "protobuf/PrivateVlanConfig.pb-c.h"
 #include "urcu.h"
 #include "util.h"
 #include "vplane_debug.h"
@@ -1178,6 +1180,53 @@ drop:
 }
 
 /*
+ * Split horizon: may a frame that arrived with this ingress horizon leave by a
+ * port in out_group?
+ *
+ * Takes values rather than ports on purpose. Today the ingress horizon is a
+ * property of the ingress port, but EVPN derives it per packet instead -- from
+ * an ESI label, or from the tunnel source under local bias -- because there the
+ * segment spans devices and the ingress port cannot say which one a frame came
+ * from. Passing values keeps that a change in the caller.
+ *
+ * Group 0 is unrestricted. An ingress with no horizon at all -- a frame the
+ * bridge itself originated, where there is no ingress port -- is group 0 and so
+ * is never restricted, which it must not be.
+ */
+static ALWAYS_INLINE bool
+bridge_horizon_allows(uint16_t in_group, bool in_intra_allow,
+		      uint16_t out_group)
+{
+	if (likely(in_group == 0) || out_group == 0)
+		return true;
+
+	return in_group == out_group && in_intra_allow;
+}
+
+/*
+ * The ingress horizon for a frame, or the unrestricted horizon when the frame
+ * did not arrive on a bridge port.
+ */
+static ALWAYS_INLINE void
+bridge_horizon_ingress(struct ifnet *in_ifp, uint16_t *group, bool *intra_allow)
+{
+	struct bridge_port *in_port;
+
+	*group = 0;
+	*intra_allow = false;
+
+	if (!in_ifp)
+		return;
+
+	in_port = rcu_dereference(in_ifp->if_brport);
+	if (!in_port)
+		return;
+
+	*group = bridge_port_get_horizon_group(in_port);
+	*intra_allow = bridge_port_get_horizon_intra_allow(in_port);
+}
+
+/*
  * bridge_forward:
  *
  *	The forwarding function of the bridge.
@@ -1221,6 +1270,21 @@ bridge_forward(struct bridge_softc *sc, struct ifnet *ifp,
 	 */
 	if (bridge_port_get_state_vlan(port, vlan) != STP_IFSTATE_FORWARDING)
 		goto drop;
+
+	/*
+	 * After the spanning tree state and the VLAN check, because split
+	 * horizon restricts frames the bridge would otherwise forward; it does
+	 * not permit ones it would not.
+	 */
+	{
+		uint16_t in_group;
+		bool in_intra_allow;
+
+		bridge_horizon_ingress(ifp, &in_group, &in_intra_allow);
+		if (!bridge_horizon_allows(in_group, in_intra_allow,
+					   bridge_port_get_horizon_group(port)))
+			goto drop;
+	}
 
 	/*
 	 * When bridging packets that are oversize are dropped.
@@ -1307,6 +1371,12 @@ static void bridge_flood_local(struct bridge_softc *sc, struct ifnet *in_ifp,
 
 	uint16_t vlan = bridge_frame_get_vlan(m);
 
+	/* Once, not per candidate port. */
+	uint16_t in_group;
+	bool in_intra_allow;
+
+	bridge_horizon_ingress(in_ifp, &in_group, &in_intra_allow);
+
 	bridge_for_each_brport(port, entry, sc) {
 		dif = bridge_port_get_interface(port);
 
@@ -1318,6 +1388,10 @@ static void bridge_flood_local(struct bridge_softc *sc, struct ifnet *in_ifp,
 
 		if (bridge_port_get_state_vlan(port, vlan)
 			!= STP_IFSTATE_FORWARDING)
+			continue;
+
+		if (!bridge_horizon_allows(in_group, in_intra_allow,
+					   bridge_port_get_horizon_group(port)))
 			continue;
 
 		if (bridge_pkt_exceeds_mtu(m, dif))
@@ -1670,6 +1744,136 @@ drop:
 	if_incr_dropped(brif);
 ignore:
 	dp_pktmbuf_notify_and_free(m);
+}
+
+/*
+ * Private VLAN configuration, as split horizon on a bridge port.
+ *
+ * Arrives as a protobuf command dispatched by topic, not as a console command.
+ * cmd_table in commands.c is the console registry; configuration replayed from
+ * vplaned's store is dispatched by topic, and a command registered only in
+ * cmd_table is an unknown topic there. That failure is not survivable: the
+ * store accepts the entry, so the sender sees success, and the dataplane then
+ * rejects the topic on every resync -- unknown topic, resync aborts, RESET,
+ * reconnect, forever, with systemctl still reporting it active. One bad entry
+ * takes a router out. 802.1X cost a router that way.
+ */
+static int cmd_pvlan_cfg(struct pb_msg *msg)
+{
+	PrivateVlanConfig *cfg =
+		private_vlan_config__unpack(NULL, msg->msg_len,
+					    (void *)msg->msg);
+	struct bridge_port *port;
+	struct ifnet *ifp;
+	int ret = -1;
+
+	if (!cfg) {
+		RTE_LOG(ERR, DATAPLANE,
+			"failed to read private-vlan protobuf command\n");
+		return -1;
+	}
+
+	if (!cfg->has_cmd || !cfg->if_name) {
+		RTE_LOG(ERR, DATAPLANE, "private-vlan: incomplete command\n");
+		goto out;
+	}
+
+	ifp = dp_ifnet_byifname(cfg->if_name);
+	if (!ifp) {
+		/*
+		 * Replay can arrive before the interface exists. Reported
+		 * rather than dropped silently: the sender cannot see this and
+		 * the port would simply never be isolated, which fails open.
+		 */
+		RTE_LOG(ERR, DATAPLANE, "private-vlan: no interface %s\n",
+			cfg->if_name);
+		goto out;
+	}
+
+	port = rcu_dereference(ifp->if_brport);
+	if (!port) {
+		/*
+		 * Same reasoning. A horizon on a port that is not in a bridge
+		 * has nothing to restrict, and saying so beats leaving the
+		 * operator to wonder why isolation did nothing.
+		 */
+		RTE_LOG(ERR, DATAPLANE,
+			"private-vlan: %s is not a bridge port\n",
+			cfg->if_name);
+		goto out;
+	}
+
+	switch (cfg->cmd) {
+	case PRIVATE_VLAN_CONFIG__COMMAND_TYPE__SET:
+		bridge_port_set_horizon(port,
+					cfg->has_group ? cfg->group : 0,
+					cfg->has_intra_allow ?
+						cfg->intra_allow : false);
+		ret = 0;
+		break;
+	case PRIVATE_VLAN_CONFIG__COMMAND_TYPE__DELETE:
+		bridge_port_set_horizon(port, 0, false);
+		ret = 0;
+		break;
+	default:
+		RTE_LOG(ERR, DATAPLANE, "private-vlan: unknown command %d\n",
+			cfg->cmd);
+		break;
+	}
+
+out:
+	private_vlan_config__free_unpacked(cfg, NULL);
+	return ret;
+}
+
+PB_REGISTER_CMD(pvlan_cfg_cmd) = {
+	.cmd = "vyatta:private-vlan",
+	.handler = cmd_pvlan_cfg,
+};
+
+/*
+ * bridge <name> horizon -- what each port's split horizon is.
+ *
+ * Read-only, and worth having: an isolated port and a broken one look identical
+ * from a ping, and the Private VLAN roles are a rendering of these two values
+ * rather than something stored separately.
+ */
+static int bridge_horizon_show(FILE *f, struct ifnet *bridge)
+{
+	struct bridge_softc *sc = bridge->if_softc;
+	struct cds_list_head *entry;
+	struct bridge_port *port;
+	json_writer_t *wr;
+
+	wr = jsonw_new(f);
+	if (!wr)
+		return -1;
+
+	jsonw_name(wr, "horizon");
+	jsonw_start_array(wr);
+	bridge_for_each_brport(port, entry, sc) {
+		uint16_t group = bridge_port_get_horizon_group(port);
+		bool intra = bridge_port_get_horizon_intra_allow(port);
+
+		jsonw_start_object(wr);
+		jsonw_string_field(wr, "port",
+				   bridge_port_get_interface(port)->if_name);
+		jsonw_uint_field(wr, "group", group);
+		jsonw_bool_field(wr, "intra_allow", intra);
+		/*
+		 * The Private VLAN name for the same thing, so an operator who
+		 * configured a role sees the role back rather than having to
+		 * translate.
+		 */
+		jsonw_string_field(wr, "role",
+				   group == 0 ? "promiscuous" :
+				   intra ? "community" : "isolated");
+		jsonw_end_object(wr);
+	}
+	jsonw_end_array(wr);
+	jsonw_destroy(&wr);
+
+	return 0;
 }
 
 /*
@@ -2675,6 +2879,9 @@ cmd_bridge(FILE *f, int argc, char **argv)
 		return -1;
 	}
 	argc--, argv++; /* skip '<bridge>' */
+
+	if (strcmp(argv[0], "horizon") == 0)
+		return bridge_horizon_show(f, bridge);
 
 	if (strcmp(argv[0], "macs") == 0)
 		return bridge_macs(f, argc, argv, bridge);
