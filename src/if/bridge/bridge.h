@@ -82,6 +82,21 @@ struct bridge_rtnode {
 	uint8_t			brt_expire;
 	rte_atomic32_t          brt_unused;     /* 0 = used */
 	uint32_t		brt_dip;
+
+	/*
+	 * Whether this entry has been reported to the kernel bridge FDB.
+	 *
+	 * Learning happens in the dataplane and stays there, which is right for
+	 * forwarding and wrong for anything that reads the kernel: zebra
+	 * decides which local MACs to advertise as EVPN type-2 routes by
+	 * reading the kernel FDB, so an unreported MAC is never advertised and
+	 * the far end never learns it. "show evpn vni" reports 0 MACs while
+	 * this table holds them.
+	 *
+	 * Set by the ageing timer rather than by the learning path, which runs
+	 * per packet per core and has no business making a syscall.
+	 */
+	bool			brt_kernel_synced;
 };
 
 struct mstp_bridge;

@@ -248,6 +248,11 @@ void kernel_neigh_netlink_sock_close(void)
 	kernel_nl = NULL;
 }
 
+struct mnl_socket *kernel_netlink_sock(void)
+{
+	return kernel_nl;
+}
+
 void kernel_neigh_netlink_sock_init(void)
 {
 	int rv;
