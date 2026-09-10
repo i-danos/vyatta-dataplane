@@ -72,6 +72,29 @@ struct bridge_port {
 	bool                    fal_created;
 	uint8_t                 state[MSTP_MSTI_COUNT];
 
+	/*
+	 * Split horizon. A frame received on a port whose group is non-zero is
+	 * not forwarded out another port in that same group unless the group
+	 * permits it. Group 0 is unrestricted, which is what an uplink is.
+	 *
+	 * This is the mechanism Private VLAN's port roles are expressed in:
+	 *
+	 *   promiscuous   group 0
+	 *   isolated      group N, horizon_intra_allow false
+	 *   community N   group N, horizon_intra_allow true
+	 *
+	 * Stored as a group rather than as a role because the same rule is what
+	 * a full mesh of pseudowires or an EVPN Ethernet Segment needs, and
+	 * because a role enumeration cannot express more than one isolated set
+	 * -- which RFC 5517 also cannot, and which is a real thing to want.
+	 *
+	 * The flag belongs to the group, not to the port; configuration has to
+	 * keep it the same on every port of a group or forwarding becomes
+	 * asymmetric. The check reads the ingress port's copy.
+	 */
+	uint16_t                horizon_group;
+	bool                    horizon_intra_allow;
+
 	/* Administrative */
 	struct rcu_head		    rcu;
 };
@@ -199,6 +222,31 @@ void
 bridge_port_set_pvid(struct bridge_port *port, uint16_t vlan)
 {
 	CMM_STORE_SHARED(port->pvid, vlan);
+}
+
+void
+bridge_port_set_horizon(struct bridge_port *port, uint16_t group,
+			bool intra_allow)
+{
+	/*
+	 * One setter, because this is where a FAL attribute would go if the
+	 * hardware ever has to enforce the same rule -- bridge_port_set_state()
+	 * has that shape already.
+	 */
+	CMM_STORE_SHARED(port->horizon_intra_allow, intra_allow);
+	CMM_STORE_SHARED(port->horizon_group, group);
+}
+
+uint16_t
+bridge_port_get_horizon_group(struct bridge_port *port)
+{
+	return CMM_LOAD_SHARED(port->horizon_group);
+}
+
+bool
+bridge_port_get_horizon_intra_allow(struct bridge_port *port)
+{
+	return CMM_LOAD_SHARED(port->horizon_intra_allow);
 }
 
 uint16_t

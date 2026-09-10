@@ -1,0 +1,51 @@
+// Copyright (c) 2026, i-danos.
+//
+// SPDX-License-Identifier: LGPL-2.1-only
+//
+// Private VLAN, carried as split horizon on a bridge port.
+//
+// A frame received on a port whose group is non-zero is not forwarded out
+// another port in the same group, unless the group allows its members to reach
+// each other. Group 0 is unrestricted.
+//
+// The three Private VLAN port roles are that rule with different arguments:
+//
+//     promiscuous    group 0
+//     isolated       group N, intra_allow false
+//     community N    group N, intra_allow true
+//
+// Sent as a group rather than as a role because the same rule is what a full
+// mesh of pseudowires and an EVPN Ethernet Segment need, and because a role
+// enumeration cannot express more than one isolated set -- which RFC 5517 also
+// cannot, and which is a real thing to want.
+//
+// intra_allow belongs to the group, not to the port. Every port of a group must
+// be sent the same value or forwarding between two of its members becomes
+// asymmetric: the check reads the ingress port's copy, so A could reach B while
+// B could not reach A. The component that generates this is responsible for
+// that consistency; the dataplane stores what it is told.
+//
+// Unlike 802.1X authorisation, this is configuration and belongs in vplaned's
+// store: a port isolated before a dataplane restart must come back isolated.
+// Failing open here would silently connect what an operator separated.
+
+syntax="proto2";
+
+option go_package = "github.com/danos/vyatta-dataplane/protobuf/go/PrivateVlanConfig";
+
+message PrivateVlanConfig {
+	enum CommandType {
+		SET    = 0;
+		DELETE = 1;
+	}
+	optional CommandType cmd = 1;
+
+	// The bridge port the horizon applies to.
+	optional string if_name = 2;
+
+	// 0 means unrestricted, which is what DELETE leaves behind.
+	optional uint32 group = 3;
+
+	// Whether members of this group may reach each other.
+	optional bool intra_allow = 4;
+}
