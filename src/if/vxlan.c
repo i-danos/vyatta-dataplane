@@ -128,6 +128,14 @@ enum VXLAN_STATS {
 	VXLAN_STATS_OUTDISCARDS_ENCAP_FAILED,
 	VXLAN_STATS_OUTDISCARDS_ND_FAILED,
 	VXLAN_STATS_OUTDISCARDS_UNKNOWN_PAYLOAD,
+	/*
+	 * A MAC a control plane asked us to install and we did not, because
+	 * its VTEP is an IPv6 address and this path only carries IPv4. It is
+	 * not a packet count; it belongs here because this is where an
+	 * operator looks when VXLAN is not doing what was configured, and the
+	 * alternative was the symptom it used to produce -- nothing at all.
+	 */
+	VXLAN_STATS_NEIGH_IPV6_VTEP,
 	VXLAN_STATS_MAX
 };
 
@@ -146,6 +154,7 @@ static const char *vxlan_cntr_names[VXLAN_STATS_MAX] = {
 	[VXLAN_STATS_OUTDISCARDS_ENCAP_FAILED] = "OutDiscardsEncapFailed",
 	[VXLAN_STATS_OUTDISCARDS_ND_FAILED] = "NDFailed",
 	[VXLAN_STATS_OUTDISCARDS_UNKNOWN_PAYLOAD] = "OutDiscardsUnknownPayload",
+	[VXLAN_STATS_NEIGH_IPV6_VTEP] = "NeighDroppedIPv6VTEP",
 };
 
 unsigned long vxlan_stats[RTE_MAX_LCORE][VXLAN_STATS_MAX] __rte_cache_aligned;
@@ -1853,10 +1862,52 @@ int vxlan_neigh_change(const struct nlmsghdr *nlh,
 	switch (nlh->nlmsg_type) {
 	case RTM_NEWNEIGH:
 		if (tb[NDA_DST]) {
-			if (mnl_attr_get_payload_len(tb[NDA_DST]) !=
-							sizeof(uint32_t)) {
+			size_t dstlen = mnl_attr_get_payload_len(tb[NDA_DST]);
+
+			/*
+			 * A 16-byte NDA_DST is a well-formed IPv6 VTEP, not a
+			 * malformed message, and saying "invalid" about it
+			 * sends whoever reads the log looking for a corrupt
+			 * kernel notification. The datapath carries IPv6 VTEPs
+			 * -- vxlan_output() and vxlan_send_packet() both handle
+			 * AF_INET6, and the table has vxlrt_dst_v6 to hold one
+			 * -- but nothing reaches them, because this function
+			 * accepts only four bytes and vxlan_newneigh() takes a
+			 * struct in_addr. So EVPN over an IPv6 underlay does
+			 * not work, and until now it did not work silently:
+			 * the MAC was simply absent and the operator had a
+			 * fabric that would not forward and nothing to read.
+			 */
+			if (dstlen == sizeof(struct in6_addr)) {
+				/*
+				 * One line per MAC would flood the log for a
+				 * fabric of any size, and the information does
+				 * not vary: say it once per dataplane
+				 * lifetime, and let the counter carry the
+				 * rest.
+				 */
+				static bool ipv6_vtep_logged;
+
+				VXLAN_STAT_INC(VXLAN_STATS_NEIGH_IPV6_VTEP);
+				if (!ipv6_vtep_logged) {
+					struct ifnet *vifp =
+					  dp_ifnet_byifindex(ndm->ndm_ifindex);
+					char b[ETH_ADDR_STR_LEN];
+
+					ipv6_vtep_logged = true;
+					RTE_LOG(NOTICE, VXLAN,
+						"%s: not installing MAC %s, its VTEP is an IPv6 address and this path carries IPv4 only. EVPN over an IPv6 underlay is not supported. This is logged once; every occurrence is counted as NeighDroppedIPv6VTEP in \"vxlan stats show\".\n",
+						vifp ? vifp->if_name : "?",
+						ether_ntoa_canon(lladdr, b,
+								 sizeof(b)));
+				}
+				return MNL_CB_ERROR;
+			}
+
+			if (dstlen != sizeof(uint32_t)) {
 				RTE_LOG(NOTICE, VXLAN,
-					"Invalid dst len in NEIGH msg\n");
+					"malformed NEIGH msg: NDA_DST is %zu bytes, which is neither an IPv4 nor an IPv6 address\n",
+					dstlen);
 				return MNL_CB_ERROR;
 			}
 
