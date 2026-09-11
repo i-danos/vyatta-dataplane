@@ -1730,8 +1730,14 @@ static void vxlan_newneigh(int ifindex,
 	sc = ifp->if_softc;
 	vrt = vxlan_rtnode_lookup(sc, dst);
 	if (vrt) {
-		/* update exist entry */
-		vrt->vxlrt_flags = ndmstate_to_flags(state);
+		/*
+		 * Update existing entry. The VTEP has to be taken as well as
+		 * the state: a MAC move is signalled by the same MAC arriving
+		 * with a different NDA_DST, and keeping the old address here
+		 * would go on encapsulating to the VTEP the host has left.
+		 */
+		vrt->vxlrt_dst = *addr;
+		vrt->vxlrt_flags = ndmstate_to_flags(state) | IFBAF_ADDR_V4;
 		return;
 	}
 
@@ -1744,7 +1750,13 @@ static void vxlan_newneigh(int ifindex,
 
 	vrt->vxlrt_dst = *addr;
 	vrt->vxlrt_addr = *dst;
-	vrt->vxlrt_flags = ndmstate_to_flags(state);
+	/*
+	 * IFBAF_ADDR_V4 marks vxlrt_dst as holding a usable VTEP address.
+	 * vxlan_output() drops any frame whose entry has neither address flag
+	 * set, so without this a MAC programmed over netlink -- which is every
+	 * MAC EVPN learns -- sits in the table and forwards nothing.
+	 */
+	vrt->vxlrt_flags = ndmstate_to_flags(state) | IFBAF_ADDR_V4;
 	vrt->vxlrt_expire = 0;
 	rte_atomic32_set(&vrt->vxlrt_unused, 1);
 
@@ -1945,7 +1957,9 @@ static void vxlan_show_macs_one(struct vxlan_vninode *vni,
 	struct vxlan_softc *sc = ifp->if_softc;
 	struct cds_lfht_iter iter;
 	struct vxlan_rtnode *vxlrt;
-	char addr_str[INET_ADDRSTRLEN];
+	char mac_str[ETH_ADDR_STR_LEN];
+	char vtep_str[INET6_ADDRSTRLEN];
+	const char *vtep;
 	uint8_t type;
 
 	dp_rcu_read_lock();
@@ -1956,14 +1970,24 @@ static void vxlan_show_macs_one(struct vxlan_vninode *vni,
 	cds_lfht_for_each_entry(sc->scvx_rthash, &iter, vxlrt, vxlrt_node) {
 		jsonw_start_object(wr);
 		jsonw_string_field(wr, "mac",
-				   ether_ntoa_r(&vxlrt->vxlrt_addr, addr_str));
+				   ether_ntoa_canon(&vxlrt->vxlrt_addr, mac_str,
+						    sizeof(mac_str)));
+		/*
+		 * The VTEP this MAC is reachable through, and it is only
+		 * usable when one of the address flags says so: vxlan_output()
+		 * tests the same flags and drops the frame when neither is
+		 * set, so an entry reported without a VTEP here is an entry
+		 * that forwards nothing.
+		 */
+		vtep = NULL;
 		if (vxlrt->vxlrt_flags & IFBAF_ADDR_V4)
-			inet_ntop(AF_INET, &vxlrt->vxlrt_dst,
-				  addr_str, sizeof(addr_str));
+			vtep = inet_ntop(AF_INET, &vxlrt->vxlrt_dst,
+					 vtep_str, sizeof(vtep_str));
 		else if (vxlrt->vxlrt_flags & IFBAF_ADDR_V6)
-			inet_ntop(AF_INET6, &vxlrt->vxlrt_dst_v6,
-				  addr_str, sizeof(addr_str));
-		jsonw_string_field(wr, "IPAddr", addr_str);
+			vtep = inet_ntop(AF_INET6, &vxlrt->vxlrt_dst_v6,
+					 vtep_str, sizeof(vtep_str));
+		jsonw_string_field(wr, "remote_ip", vtep ? vtep : "");
+		jsonw_bool_field(wr, "forwards", vtep != NULL);
 		jsonw_uint_field(wr, "VNI", vxlrt->vni ? vxlrt->vni : vni->vni);
 		type = vxlrt->vxlrt_flags & IFBAF_TYPEMASK;
 		if (type == IFBAF_DYNAMIC)
@@ -1971,7 +1995,9 @@ static void vxlan_show_macs_one(struct vxlan_vninode *vni,
 		else if (type == IFBAF_STATIC)
 			jsonw_string_field(wr, "type", "static");
 		else if (type == IFBAF_LOCAL)
-			jsonw_string_field(wr, "type", "local");
+			jsonw_string_field(wr, "type", "permanent");
+		else
+			jsonw_string_field(wr, "type", "unknown");
 		jsonw_end_object(wr);
 	}
 	jsonw_end_array(wr);
