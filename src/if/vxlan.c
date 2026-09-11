@@ -95,6 +95,14 @@
 #define	IFBAF_LOCAL	0x02	/* address of local interface */
 #define IFBAF_ADDR_V4   0x04
 #define IFBAF_ADDR_V6   0x08
+/*
+ * Programmed by a control plane, from a netlink message carrying
+ * NTF_EXT_LEARNED. FRR sets it on every remote MAC EVPN learns, and those
+ * arrive with an NUD state that maps to IFBAF_DYNAMIC, so without recording
+ * this separately there is nothing to tell a MAC BGP taught us from one the
+ * data path picked up off the wire.
+ */
+#define IFBAF_EXT_LEARNED 0x10
 
 struct vxlan_softc {
 	struct cds_lfht		*scvx_rthash;	/* fdb hash table linkage */
@@ -930,7 +938,16 @@ vxlan_rtupdate(struct ifnet *ifp,
 			free(vxlrt);
 			return;
 		}
-	} else if ((vxlrt->vxlrt_flags & IFBAF_TYPEMASK) == IFBAF_DYNAMIC) {
+	} else if ((vxlrt->vxlrt_flags & IFBAF_TYPEMASK) == IFBAF_DYNAMIC &&
+		   !(vxlrt->vxlrt_flags & IFBAF_EXT_LEARNED)) {
+		/*
+		 * Leave control-plane entries alone. Repointing one at
+		 * whichever VTEP a frame happened to arrive from would
+		 * override the decision BGP made, and EVPN resolves a MAC
+		 * appearing in two places with type-2 sequence numbers and
+		 * duplicate-address detection -- both of which depend on the
+		 * dataplane not silently picking a winner of its own.
+		 */
 		if (addr->type == AF_INET) {
 			vxlrt->vxlrt_dst = addr->address.ip_v4;
 			vxlrt->vxlrt_flags |= IFBAF_ADDR_V4;
@@ -1279,6 +1296,16 @@ drop:
  */
 static int vxlan_rtexpired(struct vxlan_rtnode *vxlrt)
 {
+	/*
+	 * A control plane owns the lifetime of what it programmed. FRR's
+	 * remote MACs arrive with an NUD state that maps to IFBAF_DYNAMIC, so
+	 * ageing on type alone would quietly drop them after half an hour of
+	 * silence -- and FRR, whose own state has not changed, would never
+	 * reprogram them.
+	 */
+	if (vxlrt->vxlrt_flags & IFBAF_EXT_LEARNED)
+		return 0;
+
 	if ((vxlrt->vxlrt_flags & IFBAF_TYPEMASK) != IFBAF_DYNAMIC)
 		return 0;
 
@@ -1716,12 +1743,26 @@ static uint8_t ndmstate_to_flags(uint16_t state)
 static void vxlan_newneigh(int ifindex,
 			   struct in_addr *addr,
 			   const struct rte_ether_addr *dst,
-			   uint16_t state)
+			   uint16_t state,
+			   uint8_t ndm_flags)
 {
 	struct ifnet *ifp;
 	struct vxlan_softc *sc;
 	struct vxlan_rtnode *vrt;
+	uint8_t flags;
 	int err;
+
+	/*
+	 * IFBAF_ADDR_V4 marks vxlrt_dst as holding a usable VTEP address.
+	 * vxlan_output() drops any frame whose entry has neither address flag
+	 * set, so without this a MAC programmed over netlink -- which is every
+	 * MAC EVPN learns -- sits in the table and forwards nothing. NDA_DST is
+	 * mandatory on this path and validated as four bytes, so the address is
+	 * always a usable IPv4 VTEP.
+	 */
+	flags = ndmstate_to_flags(state) | IFBAF_ADDR_V4;
+	if (ndm_flags & NTF_EXT_LEARNED)
+		flags |= IFBAF_EXT_LEARNED;
 
 	ifp = dp_ifnet_byifindex(ifindex);
 	if (!ifp)
@@ -1737,7 +1778,7 @@ static void vxlan_newneigh(int ifindex,
 		 * would go on encapsulating to the VTEP the host has left.
 		 */
 		vrt->vxlrt_dst = *addr;
-		vrt->vxlrt_flags = ndmstate_to_flags(state) | IFBAF_ADDR_V4;
+		vrt->vxlrt_flags = flags;
 		return;
 	}
 
@@ -1750,13 +1791,7 @@ static void vxlan_newneigh(int ifindex,
 
 	vrt->vxlrt_dst = *addr;
 	vrt->vxlrt_addr = *dst;
-	/*
-	 * IFBAF_ADDR_V4 marks vxlrt_dst as holding a usable VTEP address.
-	 * vxlan_output() drops any frame whose entry has neither address flag
-	 * set, so without this a MAC programmed over netlink -- which is every
-	 * MAC EVPN learns -- sits in the table and forwards nothing.
-	 */
-	vrt->vxlrt_flags = ndmstate_to_flags(state) | IFBAF_ADDR_V4;
+	vrt->vxlrt_flags = flags;
 	vrt->vxlrt_expire = 0;
 	rte_atomic32_set(&vrt->vxlrt_unused, 1);
 
@@ -1848,7 +1883,7 @@ int vxlan_neigh_change(const struct nlmsghdr *nlh,
 			return MNL_CB_ERROR;
 		}
 		vxlan_newneigh(ndm->ndm_ifindex, &ipaddr,
-			       lladdr, ndm->ndm_state);
+			       lladdr, ndm->ndm_state, ndm->ndm_flags);
 		break;
 
 	case RTM_DELNEIGH:
@@ -1990,6 +2025,20 @@ static void vxlan_show_macs_one(struct vxlan_vninode *vni,
 		jsonw_bool_field(wr, "forwards", vtep != NULL);
 		jsonw_uint_field(wr, "VNI", vxlrt->vni ? vxlrt->vni : vni->vni);
 		type = vxlrt->vxlrt_flags & IFBAF_TYPEMASK;
+		/*
+		 * Who put this here. "type" cannot answer that: a remote MAC
+		 * from EVPN and one the data path learned off the wire are
+		 * both IFBAF_DYNAMIC, and telling them apart is the first
+		 * question anyone debugging an EVPN fabric asks. Anything
+		 * netlink programmed without NTF_EXT_LEARNED came from an
+		 * operator rather than a protocol, so it is neither.
+		 */
+		if (vxlrt->vxlrt_flags & IFBAF_EXT_LEARNED)
+			jsonw_string_field(wr, "origin", "control-plane");
+		else if (type != IFBAF_DYNAMIC)
+			jsonw_string_field(wr, "origin", "configured");
+		else
+			jsonw_string_field(wr, "origin", "data-path");
 		if (type == IFBAF_DYNAMIC)
 			jsonw_string_field(wr, "type", "dynamic");
 		else if (type == IFBAF_STATIC)
