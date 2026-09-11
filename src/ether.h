@@ -16,6 +16,7 @@
 #include <rte_memory.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "compiler.h"
@@ -35,6 +36,25 @@ struct ether_vlan_hdr {
 
 /* Length of HW address string buffer used in debug output */
 #define ETH_ADDR_STR_LEN 18	/* "00:00:00:00:00:00" plus terminator */
+
+/*
+ * Canonical "xx:xx:xx:xx:xx:xx" form, zero padded.
+ *
+ * ether_ntoa_r() drops leading zeros, so it renders 52:54:00:03:08:01 as
+ * 52:54:0:3:8:1. That is fine for a log line a human reads, and wrong for
+ * anything compared against the kernel, FRR or a YANG mac-address leaf, none
+ * of which pad it away. Use this wherever the string leaves the dataplane to
+ * be matched rather than read. buf must be at least ETH_ADDR_STR_LEN.
+ */
+static inline const char *
+ether_ntoa_canon(const struct rte_ether_addr *addr, char *buf, size_t len)
+{
+	snprintf(buf, len, "%02x:%02x:%02x:%02x:%02x:%02x",
+		 addr->addr_bytes[0], addr->addr_bytes[1],
+		 addr->addr_bytes[2], addr->addr_bytes[3],
+		 addr->addr_bytes[4], addr->addr_bytes[5]);
+	return buf;
+}
 
 void ether_input(struct ifnet *ifp, struct rte_mbuf *m)
 	__hot_func __rte_cache_aligned;
