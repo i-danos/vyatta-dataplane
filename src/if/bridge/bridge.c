@@ -783,6 +783,18 @@ static void bridge_kernel_fdb(const struct bridge_rtnode *brt, bool add)
 	if (!ifp)
 		return;
 
+	/*
+	 * Only MACs learned on a local port. A MAC learned on the VXLAN
+	 * interface arrived from the far side and is somebody else's; reporting
+	 * it as local would have zebra advertise it back as an EVPN type-2
+	 * route owned by this VTEP, which is worse than not reporting at all.
+	 *
+	 * Measured before this check existed: the kernel FDB filled with four
+	 * entries, every one of them "dev tun0", learned over the tunnel.
+	 */
+	if (ifp->if_type == IFT_VXLAN)
+		return;
+
 	req.n.nlmsg_seq = ++seq;
 	req.ndm.ndm_ifindex = ifp->if_index;
 	mnl_attr_put(&req.n, NDA_LLADDR, RTE_ETHER_ADDR_LEN,
