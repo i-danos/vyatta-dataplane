@@ -22,6 +22,24 @@ struct lltable;
 struct llentry;
 
 bool arp_input_validate(const struct ifnet *ifp, struct rte_mbuf *m);
+
+/*
+ * Turn an ARP request in place into a reply claiming taddr is at ea.
+ *
+ * Shared because two callers want the same rewrite and nothing else in
+ * common: the L3 ARP node answers for addresses this router owns or proxies,
+ * and the bridge answers for hosts a control plane has already told it about.
+ * The node's own arp_reply() adds statistics, a GRE case and a pipeline
+ * verdict, none of which mean anything inside the bridge.
+ */
+void arp_rewrite_as_reply(struct rte_mbuf *m, const struct rte_ether_addr *ea,
+			  in_addr_t taddr);
+
+/*
+ * True if m is an ARP request; taddr is filled with the address it asks
+ * about. The caller must already have run arp_input_validate().
+ */
+bool arp_is_request(struct rte_mbuf *m, in_addr_t *taddr);
 int arpresolve(struct ifnet *ifp, struct rte_mbuf *m,
 		      in_addr_t addr, struct rte_ether_addr *desten);
 int arpresolve_fast(struct ifnet *ifp, struct rte_mbuf *m,

@@ -120,6 +120,51 @@ void get_garp_cfg(struct garp_cfg *cfg_copy)
 	*cfg_copy = garp_cfg;
 }
 
+bool arp_is_request(struct rte_mbuf *m, in_addr_t *taddr)
+{
+	const struct rte_ether_hdr *eh =
+		rte_pktmbuf_mtod(m, const struct rte_ether_hdr *);
+	const struct ether_arp *ah;
+
+	if (eh->ether_type != htons(RTE_ETHER_TYPE_ARP))
+		return false;
+
+	if (rte_pktmbuf_data_len(m) <
+	    sizeof(struct rte_ether_hdr) + sizeof(struct ether_arp))
+		return false;
+
+	ah = (const struct ether_arp *)(eh + 1);
+	if (ah->arp_op != htons(ARPOP_REQUEST))
+		return false;
+
+	/* Only IPv4 over Ethernet; anything else is not ours to answer. */
+	if (ah->arp_pro != htons(RTE_ETHER_TYPE_IPV4) ||
+	    ah->arp_hln != RTE_ETHER_ADDR_LEN ||
+	    ah->arp_pln != sizeof(in_addr_t))
+		return false;
+
+	memcpy(taddr, ah->arp_tpa, sizeof(*taddr));
+	return true;
+}
+
+void arp_rewrite_as_reply(struct rte_mbuf *m, const struct rte_ether_addr *ea,
+			  in_addr_t taddr)
+{
+	struct rte_ether_hdr *eh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
+	struct ether_arp *ah = (struct ether_arp *)(eh + 1);
+
+	ah->arp_op = htons(ARPOP_REPLY);
+
+	memcpy(ah->arp_tha, ah->arp_sha, RTE_ETHER_ADDR_LEN);
+	memcpy(ah->arp_sha, ea, RTE_ETHER_ADDR_LEN);
+
+	memcpy(ah->arp_tpa, ah->arp_spa, sizeof(struct in_addr));
+	memcpy(ah->arp_spa, &taddr, sizeof(struct in_addr));
+
+	memcpy(&eh->dst_addr, ah->arp_tha, RTE_ETHER_ADDR_LEN);
+	memcpy(&eh->src_addr, ah->arp_sha, RTE_ETHER_ADDR_LEN);
+}
+
 void set_garp_cfg(int op, enum garp_pkt_action action)
 {
 	if (op == ARPOP_REQUEST)

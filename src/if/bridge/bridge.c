@@ -70,6 +70,7 @@
 #include "pktmbuf_internal.h"
 #include "pl_node.h"
 #include "protobuf.h"
+#include "protobuf/ArpSuppressionConfig.pb-c.h"
 #include "protobuf/PrivateVlanConfig.pb-c.h"
 #include "urcu.h"
 #include "util.h"
@@ -1553,6 +1554,54 @@ drop:
 }
 
 /*
+ * Answer an ARP request for a host the control plane has already told us
+ * about, rather than flooding it to every port.
+ *
+ * The neighbour table on the bridge interface is where that knowledge already
+ * is: EVPN advertises a host's MAC and IP together in one type-2 route, zebra
+ * installs it on the SVI as an extern_learn entry, and the dataplane picks it
+ * up through the ordinary netlink path. Nothing new has to be learned here --
+ * the entry is looked up exactly as the routing path would look it up.
+ *
+ * Returns true when the request was answered and must not be flooded.
+ *
+ * Only requests are considered. A gratuitous ARP is a request too, and
+ * answering one would be wrong -- but a gratuitous ARP asks about the
+ * sender's own address, so the lookup that follows either misses or returns
+ * the sender's own entry, and either way the reply would go nowhere useful.
+ * They are let through to flood, which is what a bridge should do with them.
+ */
+static bool bridge_arp_suppress(struct bridge_softc *sc, struct ifnet *brif,
+				struct ifnet *in_ifp, struct rte_mbuf *m)
+{
+	struct llentry *la;
+	in_addr_t taddr;
+
+	if (likely(!sc->scbr_arp_suppress))
+		return false;
+
+	if (!arp_is_request(m, &taddr))
+		return false;
+
+	la = in_lltable_lookup(brif, 0, taddr);
+	if (!la || !(la->la_flags & LLE_VALID)) {
+		sc->scbr_arp_flooded++;
+		return false;
+	}
+
+	arp_rewrite_as_reply(m, &la->ll_addr, taddr);
+	sc->scbr_arp_suppressed++;
+
+	/*
+	 * Straight back out of the port it came in on. This is the one frame
+	 * a bridge originates rather than forwards, so it does not go through
+	 * the forwarding table.
+	 */
+	bridge_tx_frame(brif, NULL, in_ifp, m);
+	return true;
+}
+
+/*
  * Destination is unknown unicast, flood to all ports in bridge.
  *
  * Last match gets the original, and other entries get a copy.
@@ -1847,8 +1896,17 @@ void bridge_input(struct bridge_port *port, struct rte_mbuf *m)
 	}
 
 	/* If mcast or no entry in local forwarding table, then flood. */
-	if (mcast || !bridge_forward(sc, ifp, m, brif))
+	if (mcast || !bridge_forward(sc, ifp, m, brif)) {
+		/*
+		 * After the local copy above, so the bridge's own L3 path
+		 * still sees an ARP for one of its addresses and answers it
+		 * itself. This only takes over the case that would otherwise
+		 * have been flooded.
+		 */
+		if (bridge_arp_suppress(sc, brif, ifp, m))
+			return;
 		bridge_flood(sc, ifp, m, brif, is_pvst);
+	}
 
 	return;
 
@@ -1947,6 +2005,65 @@ PB_REGISTER_CMD(pvlan_cfg_cmd) = {
 	.handler = cmd_pvlan_cfg,
 };
 
+static int cmd_arp_suppress_cfg(struct pb_msg *msg)
+{
+	ArpSuppressionConfig *cfg =
+		arp_suppression_config__unpack(NULL, msg->msg_len,
+					       (void *)msg->msg);
+	struct bridge_softc *sc;
+	struct ifnet *ifp;
+	int ret = -1;
+
+	if (!cfg) {
+		RTE_LOG(ERR, DATAPLANE,
+			"failed to read arp-suppression protobuf command\n");
+		return -1;
+	}
+
+	if (!cfg->has_cmd || !cfg->if_name) {
+		RTE_LOG(ERR, DATAPLANE, "arp-suppression: incomplete command\n");
+		goto out;
+	}
+
+	ifp = dp_ifnet_byifname(cfg->if_name);
+	if (!ifp || ifp->if_type != IFT_BRIDGE || !ifp->if_softc) {
+		/*
+		 * Reported rather than dropped. Suppression that never took
+		 * effect is invisible from the outside -- ARP still resolves,
+		 * just by flooding -- so the only sign would be a fabric that
+		 * is noisier than the configuration says it should be.
+		 */
+		RTE_LOG(ERR, DATAPLANE, "arp-suppression: no bridge %s\n",
+			cfg->if_name);
+		goto out;
+	}
+	sc = ifp->if_softc;
+
+	switch (cfg->cmd) {
+	case ARP_SUPPRESSION_CONFIG__COMMAND_TYPE__SET:
+		sc->scbr_arp_suppress = true;
+		ret = 0;
+		break;
+	case ARP_SUPPRESSION_CONFIG__COMMAND_TYPE__DELETE:
+		sc->scbr_arp_suppress = false;
+		ret = 0;
+		break;
+	default:
+		RTE_LOG(ERR, DATAPLANE,
+			"arp-suppression: unknown command %d\n", cfg->cmd);
+		break;
+	}
+
+out:
+	arp_suppression_config__free_unpacked(cfg, NULL);
+	return ret;
+}
+
+PB_REGISTER_CMD(arp_suppress_cfg_cmd) = {
+	.cmd = "vyatta:arp-suppression",
+	.handler = cmd_arp_suppress_cfg,
+};
+
 /*
  * bridge <name> horizon -- what each port's split horizon is.
  *
@@ -1987,6 +2104,38 @@ static int bridge_horizon_show(FILE *f, struct ifnet *bridge)
 		jsonw_end_object(wr);
 	}
 	jsonw_end_array(wr);
+	jsonw_destroy(&wr);
+
+	return 0;
+}
+
+/*
+ * bridge <name> arp-suppression -- whether it is on, and whether it is doing
+ * anything.
+ *
+ * The two counters are the point. Suppression that silently does nothing is
+ * indistinguishable from suppression that works: ARP resolves either way, and
+ * the only difference is traffic nobody is looking at. "suppressed" rising
+ * says the neighbour table had the answer; "flooded" rising says it did not,
+ * which on an EVPN bridge usually means the far leaf has no SVI in that
+ * subnet and so never learned the host's IP to advertise with its MAC.
+ */
+static int bridge_arp_suppress_show(FILE *f, struct ifnet *bridge)
+{
+	struct bridge_softc *sc = bridge->if_softc;
+	json_writer_t *wr;
+
+	wr = jsonw_new(f);
+	if (!wr)
+		return -1;
+
+	jsonw_name(wr, "arp_suppression");
+	jsonw_start_object(wr);
+	jsonw_string_field(wr, "bridge", bridge->if_name);
+	jsonw_bool_field(wr, "enabled", sc->scbr_arp_suppress);
+	jsonw_uint_field(wr, "suppressed", sc->scbr_arp_suppressed);
+	jsonw_uint_field(wr, "flooded", sc->scbr_arp_flooded);
+	jsonw_end_object(wr);
 	jsonw_destroy(&wr);
 
 	return 0;
@@ -2998,6 +3147,9 @@ cmd_bridge(FILE *f, int argc, char **argv)
 
 	if (strcmp(argv[0], "horizon") == 0)
 		return bridge_horizon_show(f, bridge);
+
+	if (strcmp(argv[0], "arp-suppression") == 0)
+		return bridge_arp_suppress_show(f, bridge);
 
 	if (strcmp(argv[0], "macs") == 0)
 		return bridge_macs(f, argc, argv, bridge);
