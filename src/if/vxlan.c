@@ -130,12 +130,18 @@ enum VXLAN_STATS {
 	VXLAN_STATS_OUTDISCARDS_UNKNOWN_PAYLOAD,
 	/*
 	 * A MAC a control plane asked us to install and we did not, because
-	 * its VTEP is an IPv6 address and this path only carries IPv4. It is
-	 * not a packet count; it belongs here because this is where an
-	 * operator looks when VXLAN is not doing what was configured, and the
-	 * alternative was the symptom it used to produce -- nothing at all.
+	 * NDA_DST was neither four bytes nor sixteen. It is not a packet
+	 * count; it belongs here because this is where an operator looks when
+	 * VXLAN is not doing what was configured, and the alternative is the
+	 * symptom it used to produce -- nothing at all.
+	 *
+	 * It counted an unsupported IPv6 VTEP until IPv6 underlays were
+	 * supported. The counter is kept rather than removed because the
+	 * malformed case it now covers has the same signature for an
+	 * operator: a MAC the control plane believes it installed and the
+	 * dataplane does not have.
 	 */
-	VXLAN_STATS_NEIGH_IPV6_VTEP,
+	VXLAN_STATS_NEIGH_BAD_DST,
 	VXLAN_STATS_MAX
 };
 
@@ -154,7 +160,7 @@ static const char *vxlan_cntr_names[VXLAN_STATS_MAX] = {
 	[VXLAN_STATS_OUTDISCARDS_ENCAP_FAILED] = "OutDiscardsEncapFailed",
 	[VXLAN_STATS_OUTDISCARDS_ND_FAILED] = "NDFailed",
 	[VXLAN_STATS_OUTDISCARDS_UNKNOWN_PAYLOAD] = "OutDiscardsUnknownPayload",
-	[VXLAN_STATS_NEIGH_IPV6_VTEP] = "NeighDroppedIPv6VTEP",
+	[VXLAN_STATS_NEIGH_BAD_DST] = "NeighDroppedBadDst",
 };
 
 unsigned long vxlan_stats[RTE_MAX_LCORE][VXLAN_STATS_MAX] __rte_cache_aligned;
@@ -1749,8 +1755,32 @@ static uint8_t ndmstate_to_flags(uint16_t state)
 	return IFBAF_DYNAMIC;
 }
 
+/* Store a VTEP address in an entry, and say which of the two it is. */
+static void vxlan_rtnode_set_vtep(struct vxlan_rtnode *vrt,
+				  const struct ip_addr *addr,
+				  uint8_t base_flags)
+{
+	/*
+	 * One of the address flags has to be set. vxlan_output() tests them
+	 * and drops any frame whose entry carries neither, so an entry stored
+	 * without one sits in the table forwarding nothing -- which is what
+	 * every MAC EVPN learned used to do.
+	 *
+	 * Assigned, not or-ed: a MAC that moves from an IPv4 VTEP to an IPv6
+	 * one must not keep both flags, or vxlan_output() takes the IPv4
+	 * branch and reads an address the host has left.
+	 */
+	if (addr->type == AF_INET6) {
+		vrt->vxlrt_dst_v6 = addr->address.ip_v6;
+		vrt->vxlrt_flags = base_flags | IFBAF_ADDR_V6;
+	} else {
+		vrt->vxlrt_dst = addr->address.ip_v4;
+		vrt->vxlrt_flags = base_flags | IFBAF_ADDR_V4;
+	}
+}
+
 static void vxlan_newneigh(int ifindex,
-			   struct in_addr *addr,
+			   const struct ip_addr *addr,
 			   const struct rte_ether_addr *dst,
 			   uint16_t state,
 			   uint8_t ndm_flags)
@@ -1761,15 +1791,7 @@ static void vxlan_newneigh(int ifindex,
 	uint8_t flags;
 	int err;
 
-	/*
-	 * IFBAF_ADDR_V4 marks vxlrt_dst as holding a usable VTEP address.
-	 * vxlan_output() drops any frame whose entry has neither address flag
-	 * set, so without this a MAC programmed over netlink -- which is every
-	 * MAC EVPN learns -- sits in the table and forwards nothing. NDA_DST is
-	 * mandatory on this path and validated as four bytes, so the address is
-	 * always a usable IPv4 VTEP.
-	 */
-	flags = ndmstate_to_flags(state) | IFBAF_ADDR_V4;
+	flags = ndmstate_to_flags(state);
 	if (ndm_flags & NTF_EXT_LEARNED)
 		flags |= IFBAF_EXT_LEARNED;
 
@@ -1786,8 +1808,7 @@ static void vxlan_newneigh(int ifindex,
 		 * with a different NDA_DST, and keeping the old address here
 		 * would go on encapsulating to the VTEP the host has left.
 		 */
-		vrt->vxlrt_dst = *addr;
-		vrt->vxlrt_flags = flags;
+		vxlan_rtnode_set_vtep(vrt, addr, flags);
 		return;
 	}
 
@@ -1798,9 +1819,8 @@ static void vxlan_newneigh(int ifindex,
 		return;
 	}
 
-	vrt->vxlrt_dst = *addr;
+	vxlan_rtnode_set_vtep(vrt, addr, flags);
 	vrt->vxlrt_addr = *dst;
-	vrt->vxlrt_flags = flags;
 	vrt->vxlrt_expire = 0;
 	rte_atomic32_set(&vrt->vxlrt_unused, 1);
 
@@ -1841,8 +1861,7 @@ int vxlan_neigh_change(const struct nlmsghdr *nlh,
 		       struct nlattr *tb[])
 {
 	const struct rte_ether_addr *lladdr;
-	struct in_addr ipaddr;
-	in_addr_t *ip;
+	struct ip_addr ipaddr;
 
 	if (tb[NDA_LLADDR])
 		lladdr = RTA_DATA(tb[NDA_LLADDR]);
@@ -1865,54 +1884,31 @@ int vxlan_neigh_change(const struct nlmsghdr *nlh,
 			size_t dstlen = mnl_attr_get_payload_len(tb[NDA_DST]);
 
 			/*
-			 * A 16-byte NDA_DST is a well-formed IPv6 VTEP, not a
-			 * malformed message, and saying "invalid" about it
-			 * sends whoever reads the log looking for a corrupt
-			 * kernel notification. The datapath carries IPv6 VTEPs
-			 * -- vxlan_output() and vxlan_send_packet() both handle
-			 * AF_INET6, and the table has vxlrt_dst_v6 to hold one
-			 * -- but nothing reaches them, because this function
-			 * accepts only four bytes and vxlan_newneigh() takes a
-			 * struct in_addr. So EVPN over an IPv6 underlay does
-			 * not work, and until now it did not work silently:
-			 * the MAC was simply absent and the operator had a
-			 * fabric that would not forward and nothing to read.
+			 * Both address families. The datapath has carried
+			 * IPv6 VTEPs all along -- vxlan_output() and
+			 * vxlan_send_packet() handle AF_INET6 and the table
+			 * has vxlrt_dst_v6 -- and this entry point was the
+			 * only thing between them and a working IPv6
+			 * underlay, because it took four bytes or nothing.
+			 * The length is what says which family it is; the
+			 * kernel sends the address raw.
 			 */
 			if (dstlen == sizeof(struct in6_addr)) {
-				/*
-				 * One line per MAC would flood the log for a
-				 * fabric of any size, and the information does
-				 * not vary: say it once per dataplane
-				 * lifetime, and let the counter carry the
-				 * rest.
-				 */
-				static bool ipv6_vtep_logged;
-
-				VXLAN_STAT_INC(VXLAN_STATS_NEIGH_IPV6_VTEP);
-				if (!ipv6_vtep_logged) {
-					struct ifnet *vifp =
-					  dp_ifnet_byifindex(ndm->ndm_ifindex);
-					char b[ETH_ADDR_STR_LEN];
-
-					ipv6_vtep_logged = true;
-					RTE_LOG(NOTICE, VXLAN,
-						"%s: not installing MAC %s, its VTEP is an IPv6 address and this path carries IPv4 only. EVPN over an IPv6 underlay is not supported. This is logged once; every occurrence is counted as NeighDroppedIPv6VTEP in \"vxlan stats show\".\n",
-						vifp ? vifp->if_name : "?",
-						ether_ntoa_canon(lladdr, b,
-								 sizeof(b)));
-				}
-				return MNL_CB_ERROR;
-			}
-
-			if (dstlen != sizeof(uint32_t)) {
+				ipaddr.type = AF_INET6;
+				memcpy(&ipaddr.address.ip_v6,
+				       RTA_DATA(tb[NDA_DST]),
+				       sizeof(struct in6_addr));
+			} else if (dstlen == sizeof(uint32_t)) {
+				ipaddr.type = AF_INET;
+				memcpy(&ipaddr.address.ip_v4,
+				       RTA_DATA(tb[NDA_DST]), sizeof(uint32_t));
+			} else {
+				VXLAN_STAT_INC(VXLAN_STATS_NEIGH_BAD_DST);
 				RTE_LOG(NOTICE, VXLAN,
 					"malformed NEIGH msg: NDA_DST is %zu bytes, which is neither an IPv4 nor an IPv6 address\n",
 					dstlen);
 				return MNL_CB_ERROR;
 			}
-
-			ip = RTA_DATA(tb[NDA_DST]);
-			ipaddr.s_addr = *ip;
 		} else {
 			RTE_LOG(NOTICE, VXLAN, "no DST in NEIGH msg\n");
 			return MNL_CB_ERROR;
@@ -1927,10 +1923,23 @@ int vxlan_neigh_change(const struct nlmsghdr *nlh,
 			return MNL_CB_ERROR;
 		}
 
-		if (is_local_ipv4(if_vrfid(ifp), ipaddr.s_addr)) {
+		/*
+		 * A VTEP that is one of our own addresses would have us
+		 * encapsulate to ourselves. is_local_ipv6() has been in
+		 * route_v6.c all along, next to the v4 one this always used.
+		 */
+		if (ipaddr.type == AF_INET6 ?
+		    is_local_ipv6(if_vrfid(ifp), &ipaddr.address.ip_v6) :
+		    is_local_ipv4(if_vrfid(ifp), ipaddr.address.ip_v4.s_addr)) {
+			char b[INET6_ADDRSTRLEN];
+
 			RTE_LOG(NOTICE, VXLAN,
-					"local DST(%s) in NEIGH msg; skipping\n",
-					inet_ntoa(ipaddr));
+				"local DST(%s) in NEIGH msg; skipping\n",
+				inet_ntop(ipaddr.type,
+					  ipaddr.type == AF_INET6 ?
+					  (const void *)&ipaddr.address.ip_v6 :
+					  (const void *)&ipaddr.address.ip_v4,
+					  b, sizeof(b)) ? b : "?");
 			return MNL_CB_ERROR;
 		}
 		vxlan_newneigh(ndm->ndm_ifindex, &ipaddr,
