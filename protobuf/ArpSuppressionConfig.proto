@@ -1,0 +1,37 @@
+// Copyright (c) 2026, i-danos.
+//
+// SPDX-License-Identifier: LGPL-2.1-only
+//
+// Answer ARP from the neighbour table instead of flooding it, per bridge.
+//
+// This is the EVPN optimisation: a type-2 route carries a host's MAC and its
+// IP together, zebra installs the pair on the bridge interface, and the
+// dataplane already holds it in the same neighbour table the routing path
+// uses. Without this, every ARP for a remote host is broadcast to every leaf
+// in the fabric to discover what BGP has already delivered.
+//
+// Per bridge rather than per port. The question an operator is answering is
+// "does this bridge domain still need to flood ARP", which is a property of
+// the domain; a bridge with one suppressing port and one flooding port would
+// answer or flood depending on where the request happened to arrive.
+//
+// Enabling it on a bridge with no VXLAN member is harmless and pointless: the
+// neighbour table is then filled only by this router's own ARP, so every
+// lookup that would have been suppressed has already been resolved locally.
+// The dataplane does not refuse it -- whether a bridge is EVPN-attached is
+// not a fact it should be deciding on the operator's behalf.
+
+syntax="proto2";
+
+option go_package = "github.com/danos/vyatta-dataplane/protobuf/go/ArpSuppressionConfig";
+
+message ArpSuppressionConfig {
+	enum CommandType {
+		SET    = 0;
+		DELETE = 1;
+	}
+	optional CommandType cmd = 1;
+
+	// The bridge this applies to, not one of its ports.
+	optional string if_name = 2;
+}

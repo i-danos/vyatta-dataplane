@@ -5,6 +5,7 @@ protobuf_sources= [
         'DataplaneEnvelope.proto',
         'XConnectConfig.proto',
         'Dot1xConfig.proto',
+        'ArpSuppressionConfig.proto',
         'PrivateVlanConfig.proto',
         'PPPOEConfig.proto',
         'TCPMSSConfig.proto',

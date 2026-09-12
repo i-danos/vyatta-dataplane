@@ -113,6 +113,18 @@ struct bridge_softc {
 	bool			scbr_vlan_filter;
 	uint16_t		scbr_vlan_default_pvid;
 
+	/*
+	 * Answer an ARP request from the neighbour table instead of flooding
+	 * it. Only useful in a bridge whose members include a VXLAN tunnel:
+	 * EVPN publishes each host's IP and MAC together, zebra installs it
+	 * on this bridge, and without this every ARP for a remote host is
+	 * broadcast to every leaf in the fabric to learn what BGP has already
+	 * said.
+	 */
+	bool			scbr_arp_suppress;
+	uint64_t		scbr_arp_suppressed;
+	uint64_t		scbr_arp_flooded;
+
 	/* FAL spanning-tree object */
 	fal_object_t            stp;
 

@@ -103,20 +103,14 @@ struct	ether_arp {
 static int arp_reply(struct ifnet *ifp, struct rte_mbuf *m,
 		     const struct rte_ether_addr *ea, in_addr_t taddr)
 {
-	struct rte_ether_hdr *eh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
-	struct ether_arp *ah = (struct ether_arp *) (eh + 1);
+	struct rte_ether_hdr *eh;
+	struct ether_arp *ah;
 	in_addr_t dst_ip;
 
-	ah->arp_op = htons(ARPOP_REPLY);
+	arp_rewrite_as_reply(m, ea, taddr);
 
-	memcpy(ah->arp_tha, ah->arp_sha, RTE_ETHER_ADDR_LEN);
-	memcpy(ah->arp_sha, ea, RTE_ETHER_ADDR_LEN);
-
-	memcpy(ah->arp_tpa, ah->arp_spa, sizeof(struct in_addr));
-	memcpy(ah->arp_spa, &taddr, sizeof(struct in_addr));
-
-	memcpy(&eh->dst_addr, ah->arp_tha, RTE_ETHER_ADDR_LEN);
-	memcpy(&eh->src_addr, ah->arp_sha, RTE_ETHER_ADDR_LEN);
+	eh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
+	ah = (struct ether_arp *) (eh + 1);
 
 	char b1[INET_ADDRSTRLEN], b2[ETH_ADDR_STR_LEN];
 	ARP_DEBUG("send reply for %s (%s) on %s\n",
