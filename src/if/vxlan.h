@@ -98,7 +98,15 @@ struct vxlan_vninode {
 	uint32_t		vni;
 	in_addr_t		g_addr;
 	in_addr_t		s_addr;
+	/*
+	 * The same two endpoints for an IPv6 underlay. s_addr_v6 was already
+	 * here and read by the source-selection path; g_addr_v6 was not, so a
+	 * tunnel configured with IPv6 endpoints reached the dataplane with
+	 * neither a source nor a destination and "ifconfig tunN" reported
+	 * src=None dest=None.
+	 */
 	struct in6_addr         s_addr_v6;
+	struct in6_addr         g_addr_v6;
 	uint16_t		port_low;
 	uint16_t		port_high;
 	uint8_t			tos;

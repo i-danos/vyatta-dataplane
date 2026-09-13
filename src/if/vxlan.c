@@ -271,7 +271,7 @@ static void
 vxlan_show_info(json_writer_t *wr, struct ifnet *ifp)
 {
 	struct vxlan_vninode *vni = vxlan_vni_lookup(vxlan_get_vni(ifp));
-	char b[INET_ADDRSTRLEN];
+	char b[INET6_ADDRSTRLEN];
 
 	if (vni == NULL)
 		return;
@@ -290,6 +290,21 @@ vxlan_show_info(json_writer_t *wr, struct ifnet *ifp)
 	if (vni->s_addr != 0)
 		jsonw_string_field(wr, "source",
 				   inet_ntop(AF_INET, &vni->s_addr,
+					     b, sizeof(b)));
+	/*
+	 * The IPv6 endpoints, under the same names. Printing nothing for them
+	 * is what an IPv6 tunnel used to look like -- "src=None dest=None" on
+	 * an interface that was configured with both -- and that reads as a
+	 * tunnel that failed to come up rather than as a dump that cannot
+	 * render it.
+	 */
+	if (!IN6_IS_ADDR_UNSPECIFIED(&vni->g_addr_v6))
+		jsonw_string_field(wr, "group",
+				   inet_ntop(AF_INET6, &vni->g_addr_v6,
+					     b, sizeof(b)));
+	if (!IN6_IS_ADDR_UNSPECIFIED(&vni->s_addr_v6))
+		jsonw_string_field(wr, "source",
+				   inet_ntop(AF_INET6, &vni->s_addr_v6,
 					     b, sizeof(b)));
 	jsonw_uint_field(wr, "tos", vni->tos);
 	jsonw_uint_field(wr, "ttl", vni->ttl);
@@ -836,6 +851,11 @@ vxlan_send_packet(struct ifnet *ifp, uint32_t vni, struct ip_addr *dip,
 				dip->address.ip_v4.s_addr = vnode->g_addr;
 			else
 				goto drop;
+		} else if (dip->type == AF_INET6) {
+			if (!IN6_IS_ADDR_UNSPECIFIED(&vnode->g_addr_v6))
+				dip->address.ip_v6 = vnode->g_addr_v6;
+			else
+				goto drop;
 		}
 	}
 
@@ -1290,11 +1310,22 @@ vxlan_output(struct ifnet *ifp, struct rte_mbuf *m, uint16_t proto)
 	}
 
 	if (!vxlrt) {
-		if (!vninode->g_addr)
+		/*
+		 * Nothing learned and nothing programmed, so flood to the
+		 * tunnel's own remote endpoint. Either family; a tunnel has
+		 * one or the other, and IPv4 is preferred only because a
+		 * tunnel carrying both is a misconfiguration rather than a
+		 * case to choose between.
+		 */
+		if (vninode->g_addr) {
+			dip.type = AF_INET;
+			dip.address.ip_v4.s_addr = vninode->g_addr;
+		} else if (!IN6_IS_ADDR_UNSPECIFIED(&vninode->g_addr_v6)) {
+			dip.type = AF_INET6;
+			dip.address.ip_v6 = vninode->g_addr_v6;
+		} else {
 			goto drop;
-
-		dip.type = AF_INET;
-		dip.address.ip_v4.s_addr = vninode->g_addr;
+		}
 	}
 	(void)vxlan_send_packet(ifp, sc->scvx_vni, &dip, m, vxl_type, nxtproto,
 				is_multicast, false);
@@ -1399,6 +1430,26 @@ vxlaninfo_attr(const struct nlattr *attr, void *data)
 			return MNL_CB_ERROR;
 		}
 		break;
+	/*
+	 * The same two endpoints for an IPv6 underlay. Sixteen bytes of binary
+	 * rather than a U32, so MNL_TYPE_BINARY with an explicit length.
+	 */
+	case IFLA_VXLAN_GROUP6:
+		if (mnl_attr_validate2(attr, MNL_TYPE_BINARY,
+				       sizeof(struct in6_addr)) < 0) {
+			RTE_LOG(NOTICE, VXLAN,
+				"invalid vxlan group6 attribute %d\n", type);
+			return MNL_CB_ERROR;
+		}
+		break;
+	case IFLA_VXLAN_LOCAL6:
+		if (mnl_attr_validate2(attr, MNL_TYPE_BINARY,
+				       sizeof(struct in6_addr)) < 0) {
+			RTE_LOG(NOTICE, VXLAN,
+				"invalid vxlan local6 attribute %d\n", type);
+			return MNL_CB_ERROR;
+		}
+		break;
 	case IFLA_VXLAN_LINK:
 		if (mnl_attr_validate(attr, MNL_TYPE_U32) < 0) {
 			RTE_LOG(NOTICE, VXLAN,
@@ -1462,6 +1513,27 @@ static bool set_vxlan_params(struct ifnet *ifp,
 	else
 		vninode->g_addr = 0;
 	vninode->s_addr = 0;
+
+	/*
+	 * The IPv6 endpoints. Cleared when absent rather than left alone: a
+	 * tunnel reconfigured from an IPv6 underlay to an IPv4 one would
+	 * otherwise keep the old destination, and vxlan_output() prefers the
+	 * IPv4 one, so the stale address would sit there until something
+	 * looked.
+	 */
+	if (vxlaninfo[IFLA_VXLAN_GROUP6])
+		memcpy(&vninode->g_addr_v6,
+		       mnl_attr_get_payload(vxlaninfo[IFLA_VXLAN_GROUP6]),
+		       sizeof(vninode->g_addr_v6));
+	else
+		memset(&vninode->g_addr_v6, 0, sizeof(vninode->g_addr_v6));
+
+	if (vxlaninfo[IFLA_VXLAN_LOCAL6])
+		memcpy(&vninode->s_addr_v6,
+		       mnl_attr_get_payload(vxlaninfo[IFLA_VXLAN_LOCAL6]),
+		       sizeof(vninode->s_addr_v6));
+	else
+		memset(&vninode->s_addr_v6, 0, sizeof(vninode->s_addr_v6));
 
 	if (vxlaninfo[IFLA_VXLAN_LINK]) {
 		uint32_t pifi = mnl_attr_get_u32(vxlaninfo[IFLA_VXLAN_LINK]);
