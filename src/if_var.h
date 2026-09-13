@@ -1011,6 +1011,7 @@ uint64_t if_scaled(uint64_t value);
 void send_if_stats(const struct ifnet *ifp, const struct if_data *stats);
 
 bool ifa_broadcast(struct ifnet *ifp, uint32_t dst);
+bool ifa_is_local(struct ifnet *ifp, uint32_t addr);
 void ifa_add(int ifindex, int family, uint32_t scope,
 	     const void *addr, uint8_t prefixlen, const void *broadcast);
 void ifa_remove(int ifindex, int family, const void *addr, uint8_t prefixlen);

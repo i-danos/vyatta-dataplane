@@ -1583,6 +1583,26 @@ static bool bridge_arp_suppress(struct bridge_softc *sc, struct ifnet *brif,
 	if (!arp_is_request(m, &taddr))
 		return false;
 
+	/*
+	 * A request for one of the bridge's own addresses is already being
+	 * answered. The local copy went to the L3 path above this call, and
+	 * arp_ignore() accepts it there because the address is held by the
+	 * receiving interface. Falling through to the lookup instead would
+	 * count it as a miss -- an interface's own address is a route, not a
+	 * neighbour, so it is never in the table -- and that is wrong twice
+	 * over: the request was answered, and the one address a leaf is most
+	 * certain about would be reported as the same kind of event as a host
+	 * the fabric never advertised. An operator reading a climbing flooded
+	 * on a quiet bridge would go looking for a missing EVPN advertisement.
+	 * Measured before this guard: three such requests gave flooded +3.
+	 *
+	 * The frame still floods, as a bridge does with any broadcast. That is
+	 * not this feature's to change -- duplicate address detection on the
+	 * segment depends on the request being seen.
+	 */
+	if (unlikely(ifa_is_local(brif, taddr)))
+		return false;
+
 	la = in_lltable_lookup(brif, 0, taddr);
 	if (!la || !(la->la_flags & LLE_VALID)) {
 		sc->scbr_arp_flooded++;
