@@ -1512,7 +1512,22 @@ static bool set_vxlan_params(struct ifnet *ifp,
 		vninode->g_addr = mnl_attr_get_u32(vxlaninfo[IFLA_VXLAN_GROUP]);
 	else
 		vninode->g_addr = 0;
-	vninode->s_addr = 0;
+
+	/*
+	 * The kernel sends IFLA_VXLAN_LOCAL whenever a local-ip is configured
+	 * -- "ip -d link show" prints it as "local 10.60.60.1" -- and this
+	 * discarded it and stored zero unconditionally. Zero means "choose the
+	 * source from the route", which is the right behaviour when no local-ip
+	 * was given and the wrong one when it was: the operator names an
+	 * address and the packets leave with whatever the route picks.
+	 *
+	 * It also made "ifconfig tunN" report source=None on a tunnel that had
+	 * one, which reads as a tunnel that failed to come up.
+	 */
+	if (vxlaninfo[IFLA_VXLAN_LOCAL])
+		vninode->s_addr = mnl_attr_get_u32(vxlaninfo[IFLA_VXLAN_LOCAL]);
+	else
+		vninode->s_addr = 0;
 
 	/*
 	 * The IPv6 endpoints. Cleared when absent rather than left alone: a
