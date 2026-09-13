@@ -204,6 +204,32 @@ bool ifa_broadcast(struct ifnet *ifp, uint32_t dst)
 	return false;
 }
 
+/*
+ * Is the IPv4 address configured on this interface?
+ *
+ * This is the question arp_ignore() asks before answering a request, and it
+ * has to be asked the same way. This dataplane replies to ARP only for
+ * addresses held by the receiving interface -- Vyatta behaviour, equivalent to
+ * Linux arp_ignore=1 -- so a VRF-wide test such as is_local_ipv4() would call
+ * an address ours when in fact nothing here will reply for it.
+ */
+bool ifa_is_local(struct ifnet *ifp, uint32_t addr)
+{
+	struct if_addr *ifa;
+
+	cds_list_for_each_entry_rcu(ifa, &ifp->if_addrhead, ifa_link) {
+		struct sockaddr *sa = (struct sockaddr *)&ifa->ifa_addr;
+
+		if (sa->sa_family != AF_INET)
+			continue;
+
+		if (satosin(sa)->sin_addr.s_addr == addr)
+			return true;
+	}
+
+	return false;
+}
+
 static struct if_addr *ifa_find(struct ifnet *ifp, int family,
 				const void *addr, uint8_t prefixlen)
 {
