@@ -112,6 +112,32 @@ static inline const char *vrf_get_name(vrfid_t vrf_id)
 	return vrf ? vrf->v_name : "UNKNOWN";
 }
 
+/*
+ * The VRF name a Desired side would use for this id.
+ *
+ * The numeric ids cannot be compared across that boundary at all. DANOS's
+ * default VRF is VRF_DEFAULT_ID (1) and zebra's is 0, and for non-default VRFs
+ * the two are separate namespaces that merely happen to both be integers --
+ * one is the operator's id, the other is zebra's own numbering. Comparing them
+ * makes every route look like drift, which is what a probe against a healthy
+ * box reported before this existed.
+ *
+ * v_name is filled from a "vrfX" interface, and the default VRF has none, so
+ * it is empty there rather than absent. "default" is what zebra calls it.
+ */
+static inline const char *vrf_get_external_name(vrfid_t vrf_id)
+{
+	struct vrf *vrf;
+
+	vrf = vrf_get_rcu(vrf_id);
+	if (!vrf)
+		return "unknown";
+	if (vrf->v_name[0] == '\0')
+		return "default";
+
+	return vrf->v_name;
+}
+
 static inline vrfid_t vrf_get_next(vrfid_t vrf_id, struct vrf **vrf)
 {
 	for (*vrf = NULL;

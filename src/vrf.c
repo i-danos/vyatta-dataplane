@@ -722,7 +722,8 @@ int vrf_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
 		    subset != vrf->v_pd_state.state)
 			continue;
 
-		snprintf(key, sizeof(key), "vrf:%u", vrf->v_external_id);
+		snprintf(key, sizeof(key), "vrf:%s",
+			 vrf_get_external_name(vrf->v_id));
 		dpa_object_emit(json, "vrf", key, &vrf->v_pd_state);
 	}
 

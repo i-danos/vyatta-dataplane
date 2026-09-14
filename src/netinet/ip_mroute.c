@@ -225,8 +225,8 @@ int mroute_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
 			    subset != rt->mfc_pd_state)
 				continue;
 
-			snprintf(key, sizeof(key), "vrf:%u/(%s,%s)",
-				 dp_vrf_get_external_id(vrf->v_id),
+			snprintf(key, sizeof(key), "vrf:%s/(%s,%s)",
+				 vrf_get_external_name(vrf->v_id),
 				 inet_ntop(AF_INET, &rt->mfc_origin,
 					   src, sizeof(src)),
 				 inet_ntop(AF_INET, &rt->mfc_mcastgrp,
