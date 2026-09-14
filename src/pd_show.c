@@ -91,7 +91,25 @@ static int pd_show_dataplane(FILE *f, const char *name,
 			continue;
 
 		if (subset != PD_OBJ_STATE_LAST) {
-			if (show_hw && cmd->get_subset_data)
+			/*
+			 * Not gated on show_hw.
+			 *
+			 * It used to be, and the result was a command that
+			 * answered "{\"objects\":[]}" on a box holding seven
+			 * routes -- because no DANOS 2608 box has a FAL
+			 * backend, so show_hw is false on every one of them
+			 * and this per-object view has been dead since
+			 * hardware support was dropped.
+			 *
+			 * An empty list where there are objects is not a
+			 * policy, it is a false statement: a reader cannot
+			 * tell "no objects in this state" from "no backend
+			 * loaded". The software lane's pd_obj_state is real
+			 * and worth listing -- not_needed and no_support say
+			 * something about a route whether or not any hardware
+			 * exists to have declined it.
+			 */
+			if (cmd->get_subset_data)
 				rc = cmd->get_subset_data(wr, subset);
 			else
 				rc = 0;

@@ -347,3 +347,41 @@ DP_START_TEST(fal_cap, dpa_object_vrf_same_shape)
 	json_object_put(expected);
 
 } DP_END_TEST;
+
+/*
+ * The per-object pd view lists objects with no backend loaded.
+ *
+ * It used to be gated on fal_plugins_present(), so on a box with no FAL
+ * backend -- which is every DANOS 2608 box -- "pd show dataplane route full"
+ * answered with an empty list while "pd show dataplane route" counted seven.
+ * Two views of the same data disagreeing, with nothing to say why.
+ *
+ * An empty list where there are objects is not a policy, it is a false
+ * statement: a reader cannot tell "no objects in this state" from "no backend
+ * loaded". This harness always has a plugin, which is why the unit tests never
+ * saw it and a probe on a real box did.
+ *
+ * The assertion has to be about *content*, not about the request succeeding.
+ * "the command returned JSON" was true the whole time it was wrong.
+ */
+DP_START_TEST(fal_cap, pd_subset_lists_objects)
+{
+	json_object *expected;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+	dp_test_netlink_add_route("10.75.0.0/24 nh 1.1.1.2 int:dp1T0");
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"objects\": ["
+		"        { \"prefix\": \"10.75.0.0/24\" }"
+		"    ]"
+		"}");
+	dp_test_check_json_state("pd show dataplane route full", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+	dp_test_netlink_del_route("10.75.0.0/24 nh 1.1.1.2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+
+} DP_END_TEST;
