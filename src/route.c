@@ -2675,8 +2675,8 @@ static void rt_dpa_emit(struct lpm *lpm, struct vrf *vrf,
 	 * compared against a Desired side, and FRR and an operator both say
 	 * the external number; a key nothing else can produce is not a key.
 	 */
-	snprintf(key, sizeof(key), "vrf:%u/table:%u/%s/%u",
-		 dp_vrf_get_external_id(vrf->v_id), lpm_get_id(lpm),
+	snprintf(key, sizeof(key), "vrf:%s/table:%u/%s/%u",
+		 vrf_get_external_name(vrf->v_id), lpm_get_id(lpm),
 		 inet_ntop(AF_INET, &dst, addr, sizeof(addr)), params->depth);
 
 	dpa_object_emit(w->json, "route", key, pd_state);

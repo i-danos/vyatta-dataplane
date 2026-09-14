@@ -2883,8 +2883,8 @@ static void rt6_dpa_emit(struct vrf *vrf, uint32_t tableid,
 	if (w->subset != PD_OBJ_STATE_LAST && w->subset != pd_state->state)
 		return;
 
-	snprintf(key, sizeof(key), "vrf:%u/table:%u/%s/%u",
-		 dp_vrf_get_external_id(vrf->v_id), tableid,
+	snprintf(key, sizeof(key), "vrf:%s/table:%u/%s/%u",
+		 vrf_get_external_name(vrf->v_id), tableid,
 		 inet_ntop(AF_INET6, params->prefix, addr, sizeof(addr)),
 		 params->pr_len);
 
