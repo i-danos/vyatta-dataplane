@@ -2664,7 +2664,7 @@ static void rt_dpa_emit(struct lpm *lpm, struct vrf *vrf,
 {
 	struct rt_dpa_walk *w = arg;
 	char addr[INET_ADDRSTRLEN];
-	char key[80];
+	char key[96];
 	in_addr_t dst = htonl(params->ip);
 
 	if (w->subset != PD_OBJ_STATE_LAST && w->subset != pd_state->state)
@@ -2675,9 +2675,24 @@ static void rt_dpa_emit(struct lpm *lpm, struct vrf *vrf,
 	 * compared against a Desired side, and FRR and an operator both say
 	 * the external number; a key nothing else can produce is not a key.
 	 */
-	snprintf(key, sizeof(key), "vrf:%s/table:%u/%s/%u",
+	/*
+	 * Scope is part of the key because it is part of the identity.
+	 *
+	 * The LPM keys on (prefix, depth, scope) and this key did not carry
+	 * the third, so the reserved reject default at
+	 * LPM_SCOPE_PAN_DIMENSIONAL and zebra's real default collapsed onto
+	 * one key -- eight objects arriving as six, with the arithmetic that
+	 * follows looking entirely normal. A comparison that silently loses
+	 * objects cannot be the basis for repairing them.
+	 *
+	 * A Desired side compares on the part before it; see dpa-drift.py,
+	 * which splits the scope off rather than requiring zebra to have a
+	 * matching notion of one.
+	 */
+	snprintf(key, sizeof(key), "vrf:%s/table:%u/%s/%u/scope:%d",
 		 vrf_get_external_name(vrf->v_id), lpm_get_id(lpm),
-		 inet_ntop(AF_INET, &dst, addr, sizeof(addr)), params->depth);
+		 inet_ntop(AF_INET, &dst, addr, sizeof(addr)), params->depth,
+		 params->scope);
 
 	dpa_object_emit_owned(w->json, "route", key, pd_state,
 			      rt_is_reserved(params->ip, params->depth, params->scope));

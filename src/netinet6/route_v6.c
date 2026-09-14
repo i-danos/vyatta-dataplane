@@ -2878,15 +2878,16 @@ static void rt6_dpa_emit(struct vrf *vrf, uint32_t tableid,
 {
 	struct rt6_dpa_walk *w = arg;
 	char addr[INET6_ADDRSTRLEN];
-	char key[96];
+	char key[112];
 
 	if (w->subset != PD_OBJ_STATE_LAST && w->subset != pd_state->state)
 		return;
 
-	snprintf(key, sizeof(key), "vrf:%s/table:%u/%s/%u",
+	/* Scope is part of the identity -- see the note in route.c. */
+	snprintf(key, sizeof(key), "vrf:%s/table:%u/%s/%u/scope:%d",
 		 vrf_get_external_name(vrf->v_id), tableid,
 		 inet_ntop(AF_INET6, params->prefix, addr, sizeof(addr)),
-		 params->pr_len);
+		 params->pr_len, params->scope);
 
 	dpa_object_emit_owned(w->json, "route6", key, pd_state,
 			      rt6_is_reserved(params->prefix, params->pr_len, params->scope));
