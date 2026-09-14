@@ -36,6 +36,7 @@
 #include "dp_event.h"
 #include "ecmp.h"
 #include "fal.h"
+#include "dpa_object.h"
 #include "fal_capability.h"
 #include "ip_forward.h"
 #include "if_llatbl.h"
@@ -2649,6 +2650,44 @@ static void rt_show_subset(struct lpm *lpm, struct vrf *vrf,
 
 	if (subset->subset == pd_state->state)
 		rt_display_all(lpm, params, pd_state, subset->json);
+}
+
+struct rt_dpa_walk {
+	json_writer_t *json;
+	enum pd_obj_state subset;
+};
+
+static void rt_dpa_emit(struct lpm *lpm, struct vrf *vrf,
+			struct lpm_walk_params *params,
+			struct pd_obj_state_and_flags *pd_state,
+			void *arg)
+{
+	struct rt_dpa_walk *w = arg;
+	char addr[INET_ADDRSTRLEN];
+	char key[80];
+	in_addr_t dst = htonl(params->ip);
+
+	if (w->subset != PD_OBJ_STATE_LAST && w->subset != pd_state->state)
+		return;
+
+	/*
+	 * The external VRF id, not the internal one. This key exists to be
+	 * compared against a Desired side, and FRR and an operator both say
+	 * the external number; a key nothing else can produce is not a key.
+	 */
+	snprintf(key, sizeof(key), "vrf:%u/table:%u/%s/%u",
+		 dp_vrf_get_external_id(vrf->v_id), lpm_get_id(lpm),
+		 inet_ntop(AF_INET, &dst, addr, sizeof(addr)), params->depth);
+
+	dpa_object_emit(w->json, "route", key, pd_state);
+}
+
+int route_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
+{
+	struct rt_dpa_walk w = { .json = json, .subset = subset };
+
+	rt_lpm_walk_util(rt_dpa_emit, &w);
+	return 0;
 }
 
 /*

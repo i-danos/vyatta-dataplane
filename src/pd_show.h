@@ -53,6 +53,9 @@ struct pd_obj_state_and_flags {
 /* pd show dataplane */
 int cmd_pd(FILE *f, int argc, char **argv);
 
+const char *pd_obj_state_name(enum pd_obj_state state);
+enum pd_obj_state pd_obj_state_from_name(const char *name);
+
 enum pd_obj_state fal_state_to_pd_state(int fal_state);
 
 

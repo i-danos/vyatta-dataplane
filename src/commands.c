@@ -89,6 +89,7 @@
 #include "vplane_log.h"
 #include "vrf_internal.h"
 #include "vrf_if.h"
+#include "dpa_object.h"
 #include "fal.h"
 #include "npf/dpi/app_cmds.h"
 #include "storm_ctl.h"
@@ -1887,6 +1888,7 @@ static const cmd_t cmd_table[] = {
 	{ 1,	"npf-op",	cmd_npf_op,	"NPF (FW/NAT/PBR) OP mode" },
 	{ 1,	"npf-ut",	cmd_npf_ut,	"NPF (FW/NAT/PBR) UT mode" },
 	{ 1,	"pathmonitor",	cmd_pathmonitor, "pathmonitor command" },
+	{ 1,    "dpa",          cmd_dpa,        "DPA object model" },
 	{ 1,    "pd",           cmd_pd,         "Platform dependent data" },
 	{ 0,	"pipeline",	op_pipeline,	"Pipeline op dispatcher" },
 	{ 0,    "feat-plugin",  cmd_feat_plugin,"Feature plugin commands" },

@@ -30,6 +30,7 @@
 #include <sys/socket.h>
 #include <urcu/uatomic.h>
 
+#include "dpa_object.h"
 #include "compiler.h"
 #include "address.h"
 #include "compat.h"
@@ -2864,6 +2865,39 @@ static void rt6_show_subset(struct vrf *vrf, uint32_t tableid,
 		rt6_display_all(params, pd_state, subset->json);
 }
 
+
+struct rt6_dpa_walk {
+	json_writer_t *json;
+	enum pd_obj_state subset;
+};
+
+static void rt6_dpa_emit(struct vrf *vrf, uint32_t tableid,
+			 struct lpm6_walk_params *params,
+			 struct pd_obj_state_and_flags *pd_state,
+			 void *arg)
+{
+	struct rt6_dpa_walk *w = arg;
+	char addr[INET6_ADDRSTRLEN];
+	char key[96];
+
+	if (w->subset != PD_OBJ_STATE_LAST && w->subset != pd_state->state)
+		return;
+
+	snprintf(key, sizeof(key), "vrf:%u/table:%u/%s/%u",
+		 dp_vrf_get_external_id(vrf->v_id), tableid,
+		 inet_ntop(AF_INET6, params->prefix, addr, sizeof(addr)),
+		 params->pr_len);
+
+	dpa_object_emit(w->json, "route6", key, pd_state);
+}
+
+int route6_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
+{
+	struct rt6_dpa_walk w = { .json = json, .subset = subset };
+
+	rt6_lpm_walk_util(rt6_dpa_emit, &w);
+	return 0;
+}
 
 int route6_get_pd_subset_data(json_writer_t *json,
 			      enum pd_obj_state subset)
