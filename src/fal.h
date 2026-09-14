@@ -672,6 +672,27 @@ bool fal_is_ipaddr_empty(const struct fal_ip_address_t *ipaddr);
 enum fal_ip_addr_family_t addr_family_to_fal_ip_addr_family(int family);
 
 void fal_register_message_handler(struct message_handler *handler);
+/*
+ * The op groups that have a capability to disagree with. Only these, because
+ * only these are dispatched by capability -- the rest go to the first backend
+ * and have nothing to be inconsistent with.
+ */
+enum fal_op_group {
+	FAL_OP_GROUP_IP,
+	FAL_OP_GROUP_IPMC,
+	FAL_OP_GROUP_ACL,
+	FAL_OP_GROUP_QOS,
+	FAL_OP_GROUP_MPLS,
+	FAL_OP_GROUP_TUN,
+	FAL_OP_GROUP_VLAN,
+	FAL_OP_GROUP_VRF,
+};
+
+struct message_handler *fal_backend_handler(unsigned int idx);
+bool fal_backend_implements(unsigned int idx, enum fal_op_group group);
+unsigned int fal_backend_count(void);
+int fal_get_switch_attrs_backend(unsigned int idx, uint32_t attr_count,
+				 struct fal_attribute_t *attr_list);
 void fal_delete_message_handler(struct message_handler *handler);
 
 /* Set the ip addr into the given attr */

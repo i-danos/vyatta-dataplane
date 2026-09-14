@@ -40,9 +40,13 @@ DP_START_TEST(fal_cap, backend_identity)
 	expected = dp_test_json_create(
 		"{"
 		"    \"fal_capability\": {"
-		"        \"backend\": \"fal-test\","
-		"        \"backend_loaded\": true,"
-		"        \"offload_features\": \"none,test-only\""
+		"        \"backends_loaded\": 2,"
+		"        \"backends\": ["
+		"            { \"index\": 0, \"backend\": \"fal-test\","
+		"              \"offload_features\": \"none,test-only\" },"
+		"            { \"index\": 1, \"backend\": \"fal-test-b\","
+		"              \"offload_features\": \"rss,tx-checksum\" }"
+		"        ]"
 		"    }"
 		"}");
 	dp_test_check_json_state("fal capability show", expected,
@@ -52,12 +56,17 @@ DP_START_TEST(fal_cap, backend_identity)
 } DP_END_TEST;
 
 /*
- * A mixed set, asserted as a set. Checking only the true ones would pass
- * against a backend that answers true to everything, and checking only the
- * false ones would pass against one that answers false to everything -- and
- * "false to everything" is exactly what a broken attribute id mapping
- * produces, because an unknown id returns -EOPNOTSUPP and the query defaults
- * to false.
+ * A mixed set, asserted as a set, for each backend separately.
+ *
+ * Checking only the true ones would pass against a backend that answers true
+ * to everything, and checking only the false ones would pass against one that
+ * answers false to everything -- and "false to everything" is exactly what a
+ * broken attribute id mapping produces, because an unknown id returns an error
+ * and the query then defaults to false.
+ *
+ * The two backends declare complementary sets, so the same capability name
+ * carries opposite values in the two objects. A cache that filled every slot
+ * from one backend's answers would be caught here and nowhere else.
  */
 DP_START_TEST(fal_cap, mixed_feature_set)
 {
@@ -66,45 +75,24 @@ DP_START_TEST(fal_cap, mixed_feature_set)
 	expected = dp_test_json_create(
 		"{"
 		"    \"fal_capability\": {"
-		"        \"can\": {"
-		"            \"ipv4\": true,"
-		"            \"ipv6\": false,"
-		"            \"vrf\": true,"
-		"            \"vlan\": true,"
-		"            \"qinq\": false,"
-		"            \"mpls\": false,"
-		"            \"vxlan\": true,"
-		"            \"evpn\": false,"
-		"            \"acl\": true,"
-		"            \"qos\": false,"
-		"            \"multicast\": false"
-		"        }"
-		"    }"
-		"}");
-	dp_test_check_json_state("fal capability show", expected,
-				 DP_TEST_JSON_CHECK_SUBSET, false);
-	json_object_put(expected);
-
-} DP_END_TEST;
-
-/*
- * A software backend is a legitimate backend, and the distinction between
- * "programmed somewhere else" and "programmed in hardware" is what an operator
- * reading offload counters needs. The test plugin offloads nothing, so it
- * declares hw_offload false while declaring five features true -- which is
- * only a contradiction if the two are conflated.
- */
-DP_START_TEST(fal_cap, hw_offload_is_separate_from_features)
-{
-	json_object *expected;
-
-	expected = dp_test_json_create(
-		"{"
-		"    \"fal_capability\": {"
-		"        \"can\": {"
-		"            \"hw_offload\": false,"
-		"            \"vxlan\": true"
-		"        }"
+		"        \"backends\": ["
+		"            { \"index\": 0, \"can\": {"
+		"                \"ipv4\": true,   \"ipv6\": false,"
+		"                \"vrf\": false,   \"vlan\": true,"
+		"                \"qinq\": false,  \"mpls\": false,"
+		"                \"vxlan\": false, \"evpn\": false,"
+		"                \"acl\": false,   \"qos\": true,"
+		"                \"multicast\": false,"
+		"                \"hw_offload\": false } },"
+		"            { \"index\": 1, \"can\": {"
+		"                \"ipv4\": false,  \"ipv6\": true,"
+		"                \"vrf\": true,    \"vlan\": false,"
+		"                \"qinq\": true,   \"mpls\": true,"
+		"                \"vxlan\": true,  \"evpn\": true,"
+		"                \"acl\": true,    \"qos\": false,"
+		"                \"multicast\": true,"
+		"                \"hw_offload\": true } }"
+		"        ]"
 		"    }"
 		"}");
 	dp_test_check_json_state("fal capability show", expected,
@@ -115,9 +103,11 @@ DP_START_TEST(fal_cap, hw_offload_is_separate_from_features)
 
 /*
  * Scale limits, which travel a different union member from the booleans and so
- * can break independently. The values are deliberately not round: 65536 or
- * 4096 would also be produced by a truncation or a shift, while 65537 and 4099
- * would not survive either.
+ * can break independently, and differ between the two backends so that one
+ * backend's answers cannot stand in for the other's.
+ *
+ * The values are deliberately not round: 65536 or 4096 would also be produced
+ * by a truncation or a shift, while 65537 and 4099 would not survive either.
  */
 DP_START_TEST(fal_cap, scale_limits)
 {
@@ -126,11 +116,56 @@ DP_START_TEST(fal_cap, scale_limits)
 	expected = dp_test_json_create(
 		"{"
 		"    \"fal_capability\": {"
-		"        \"limits\": {"
-		"            \"max_routes\": 65537,"
-		"            \"max_next_hops\": 4099,"
-		"            \"max_acl_entries\": 1031,"
-		"            \"max_tunnels\": 257"
+		"        \"backends\": ["
+		"            { \"index\": 0, \"limits\": {"
+		"                \"max_routes\": 65537,"
+		"                \"max_next_hops\": 4099,"
+		"                \"max_acl_entries\": 1031,"
+		"                \"max_tunnels\": 257 } },"
+		"            { \"index\": 1, \"limits\": {"
+		"                \"max_routes\": 131075,"
+		"                \"max_next_hops\": 8195,"
+		"                \"max_acl_entries\": 2053,"
+		"                \"max_tunnels\": 521 } }"
+		"        ]"
+		"    }"
+		"}");
+	dp_test_check_json_state("fal capability show", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+} DP_END_TEST;
+
+/*
+ * Selection discriminates.
+ *
+ * This is the assertion the second backend exists for. Every capability where
+ * fal-test-b wins, it wins *against* the preference order -- it is second in
+ * platform.conf -- so "picked the right backend" cannot be confused with
+ * "picked the first one". And every capability where fal-test wins is one
+ * fal-test-b declines, so the reverse cannot be confused with "picked the last
+ * one" either.
+ */
+DP_START_TEST(fal_cap, selection_discriminates)
+{
+	json_object *expected;
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"fal_capability\": {"
+		"        \"selection\": {"
+		"            \"ipv4\": \"fal-test\","
+		"            \"vlan\": \"fal-test\","
+		"            \"qos\": \"fal-test\","
+		"            \"ipv6\": \"fal-test-b\","
+		"            \"vrf\": \"fal-test-b\","
+		"            \"qinq\": \"fal-test-b\","
+		"            \"mpls\": \"fal-test-b\","
+		"            \"vxlan\": \"fal-test-b\","
+		"            \"evpn\": \"fal-test-b\","
+		"            \"acl\": \"fal-test-b\","
+		"            \"multicast\": \"fal-test-b\","
+		"            \"hw_offload\": \"fal-test-b\""
 		"        }"
 		"    }"
 		"}");
