@@ -686,7 +686,44 @@ enum fal_op_group {
 	FAL_OP_GROUP_TUN,
 	FAL_OP_GROUP_VLAN,
 	FAL_OP_GROUP_VRF,
+	/*
+	 * Ports, router interfaces, LAG, STP, mirroring, BFD, the switch
+	 * itself: no capability names them, so they go to the first backend --
+	 * which is what a single backend has always done.
+	 */
+	FAL_OP_GROUP_ANY,
+	FAL_OP_GROUP_LAST,
 };
+
+/*
+ * Which backend takes this op group.
+ *
+ * One function, used by the dispatch macros *and* by the per-object record of
+ * which backend holds an object. Two mappings would be two chances to
+ * disagree, and a record that names a backend the object never reached is
+ * worse than no record -- it is a report that says the opposite of what
+ * happened.
+ */
+unsigned int fal_backend_for_group(enum fal_op_group group);
+
+/*
+ * Record the outcome of a FAL call on an object: what happened, and where.
+ *
+ * Declared here rather than in pd_show.h because it needs enum fal_op_group,
+ * and pd_show.h is included by headers that cannot afford to pull in fal.h --
+ * struct next_hop and the multicast forwarding cache both come apart if it
+ * does.
+ *
+ * The two fields are set together because they can only be right together. The
+ * backend comes from fal_backend_for_group(), the same function dispatch used
+ * to choose one, so the record cannot name a backend the object never reached.
+ * And it is recorded only when the object is actually there: a selected
+ * backend that returned an error did not take the object, it stayed in
+ * software, and naming it would make the report say the opposite of what
+ * happened.
+ */
+void pd_state_set(struct pd_obj_state_and_flags *pd, int fal_rc,
+		  enum fal_op_group group);
 
 struct message_handler *fal_backend_handler(unsigned int idx);
 bool fal_backend_implements(unsigned int idx, enum fal_op_group group);

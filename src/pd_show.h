@@ -9,6 +9,7 @@
 
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -28,10 +29,24 @@ enum pd_obj_state {
 	PD_OBJ_STATE_LAST,
 };
 
+/*
+ * Which backend holds this object.
+ *
+ * Four bits, so at most fifteen real backends could ever be named and
+ * FAL_MAX_BACKENDS is four -- the table is deliberately smaller than the field
+ * that has to record it, rather than the other way round.
+ *
+ * 0xF means no backend has it: the object is in software. That is the ordinary
+ * case and not an error, which is why it has a name rather than being left as
+ * a zero that would be indistinguishable from backend zero.
+ */
+#define PD_BACKEND_NONE 0xF
+
 struct pd_obj_state_and_flags {
 	/* object has successfully been programmed in HW */
 	uint16_t created : 1;
-	uint16_t unused  : 15;
+	uint16_t backend : 4;
+	uint16_t unused  : 11;
 	enum pd_obj_state state : 16;
 };
 
@@ -39,6 +54,8 @@ struct pd_obj_state_and_flags {
 int cmd_pd(FILE *f, int argc, char **argv);
 
 enum pd_obj_state fal_state_to_pd_state(int fal_state);
+
+
 
 bool fal_state_is_obj_present(enum pd_obj_state pd_obj_state);
 

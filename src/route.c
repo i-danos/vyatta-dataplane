@@ -36,6 +36,7 @@
 #include "dp_event.h"
 #include "ecmp.h"
 #include "fal.h"
+#include "fal_capability.h"
 #include "ip_forward.h"
 #include "if_llatbl.h"
 #include "if_var.h"
@@ -222,7 +223,7 @@ route_lpm_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 					       hops, size, nhg_fal_obj);
 		}
 		if (update_pd_state)
-			pd_state->state = fal_state_to_pd_state(rc);
+			pd_state_set(pd_state, rc, FAL_OP_GROUP_IP);
 		if (!rc || old_pd_state->created)
 			pd_state->created = true;
 		route_hw_stats[old_pd_state->state]--;
@@ -239,7 +240,7 @@ route_lpm_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 	rc = fal_ip4_new_route(vrf_id, vrf_obj, ip, depth, lpm_get_id(lpm),
 			       hops, size, nhg_fal_obj);
 	if (update_pd_state)
-		pd_state->state = fal_state_to_pd_state(rc);
+		pd_state_set(pd_state, rc, FAL_OP_GROUP_IP);
 	if (!rc)
 		pd_state->created = true;
 	route_hw_stats[pd_state->state]++;
@@ -347,7 +348,7 @@ route_lpm_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 	if (!rc || pd_state.created)
 		new_pd_state->created = true;
 	if (update_new_pd_state)
-		new_pd_state->state = fal_state_to_pd_state(rc);
+		pd_state_set(new_pd_state, rc, FAL_OP_GROUP_IP);
 	route_hw_stats[new_pd_state->state]++;
 	/* Successfully added to SW, so return success. */
 	return 0;
@@ -414,7 +415,7 @@ route_lpm_delete(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 					       hops, size, nhg_fal_obj);
 		}
 		if (update_new_pd_state)
-			new_pd_state->state = fal_state_to_pd_state(rc);
+			pd_state_set(new_pd_state, rc, FAL_OP_GROUP_IP);
 		if (!rc || pd_state.created)
 			new_pd_state->created = true;
 		route_hw_stats[pd_state.state]--;
@@ -1685,9 +1686,14 @@ static void rt_local_display(
 		fprintf(f, "\t%s\n", inet_ntop(AF_INET, &dst, b, sizeof(b)));
 }
 
+/*
+ * pd_state may be NULL: "show route" has no platform state to report, while
+ * "pd show dataplane route <state>" walks the same emitter and does.
+ */
 static void __rt_display(json_writer_t *json, in_addr_t *dst, uint8_t depth,
 			 int16_t scope, const struct next_hop_list *nextl,
-			 uint32_t next_hop)
+			 uint32_t next_hop,
+			 const struct pd_obj_state_and_flags *pd_state)
 {
 	char b1[INET_ADDRSTRLEN];
 	char b2[INET6_ADDRSTRLEN]; /* extra room for mask, not for ipv6 here */
@@ -1699,6 +1705,17 @@ static void __rt_display(json_writer_t *json, in_addr_t *dst, uint8_t depth,
 		inet_ntop(AF_INET, dst, b1, sizeof(b1)), depth);
 	jsonw_string_field(json, "prefix", b2);
 	jsonw_int_field(json, "scope", scope);
+	/*
+	 * Which backend holds this route. A record nothing outside the data
+	 * plane can read is a record that cannot be tested from outside it
+	 * either, and every verification in this tree drives the box from
+	 * outside.
+	 */
+	if (pd_state)
+		jsonw_string_field(json, "backend",
+				   pd_state->backend == PD_BACKEND_NONE ?
+				   "sw-dataplane" :
+				   fal_backend_name(pd_state->backend));
 	jsonw_uint_field(json, "proto", nextl->proto);
 	switch (nextl->use) {
 	case FAL_NHG_USE_IP:
@@ -1742,12 +1759,12 @@ static void rt_display(struct lpm *lpm __rte_unused,
 		return;
 
 	__rt_display(json, &dst, params->depth, params->scope, nextl,
-		     params->next_hop);
+		     params->next_hop, NULL);
 }
 
 static void rt_display_all(struct lpm *lpm __rte_unused,
 			   struct lpm_walk_params *params,
-			   struct pd_obj_state_and_flags *pd_state __rte_unused,
+			   struct pd_obj_state_and_flags *pd_state,
 			   void *arg)
 {
 	json_writer_t *json = arg;
@@ -1758,7 +1775,7 @@ static void rt_display_all(struct lpm *lpm __rte_unused,
 	if (unlikely(!nextl))
 		return;
 	__rt_display(json, &dst, params->depth, params->scope, nextl,
-		     params->next_hop);
+		     params->next_hop, pd_state);
 }
 
 /* Route rule list (RB-tree) is not RCU safe */
@@ -2672,7 +2689,7 @@ static void route_fal_upd_for_changed_nhl(
 			       lpm_get_id(lpm), nextl->siblings,
 			       nextl->nsiblings, nextl->nhg_fal_obj);
 
-	pd_state->state = fal_state_to_pd_state(rc);
+	pd_state_set(pd_state, rc, FAL_OP_GROUP_IP);
 
 	/* Kick trackers so that clients can learn about FAL changes */
 	params->call_tracker_cbs = true;
