@@ -296,6 +296,66 @@ int fal_plugin_get_switch_attribute(uint32_t attr_count,
 		case FAL_SWITCH_ATTR_MAX_BURST_SIZE:
 			attr->value.u32 = 130048;
 			break;
+
+		/*
+		 * Capability. A deliberately *mixed* set: IPv4 yes and IPv6
+		 * no, VXLAN yes and MPLS no.
+		 *
+		 * All-true and all-false are both indistinguishable from a
+		 * stub that ignores the attribute id and returns a constant,
+		 * and all-false is specifically what a broken id mapping
+		 * produces, because an unknown id returns an error here and
+		 * the caller's query then defaults to false. A capability
+		 * model whose test cannot separate those from a real answer
+		 * is not being tested.
+		 */
+		case FAL_SWITCH_ATTR_CAP_IPV4:
+		case FAL_SWITCH_ATTR_CAP_VRF:
+		case FAL_SWITCH_ATTR_CAP_VLAN:
+		case FAL_SWITCH_ATTR_CAP_VXLAN:
+		case FAL_SWITCH_ATTR_CAP_ACL:
+			attr->value.booldata = true;
+			break;
+		case FAL_SWITCH_ATTR_CAP_IPV6:
+		case FAL_SWITCH_ATTR_CAP_QINQ:
+		case FAL_SWITCH_ATTR_CAP_MPLS:
+		case FAL_SWITCH_ATTR_CAP_EVPN:
+		case FAL_SWITCH_ATTR_CAP_QOS:
+		case FAL_SWITCH_ATTR_CAP_MULTICAST:
+		/*
+		 * This plugin records what the data plane hands it and
+		 * offloads nothing, so it is a software backend -- which is a
+		 * legitimate backend, and the reason hw_offload is a separate
+		 * question from the feature list rather than implied by it.
+		 */
+		case FAL_SWITCH_ATTR_CAP_HW_OFFLOAD:
+			attr->value.booldata = false;
+			break;
+
+		/*
+		 * Not round numbers, on purpose. 65536 and 4096 are also what
+		 * a truncation or a stray shift would produce; 65537 and 4099
+		 * survive neither.
+		 */
+		case FAL_SWITCH_ATTR_CAP_MAX_ROUTES:
+			attr->value.u64 = 65537;
+			break;
+		case FAL_SWITCH_ATTR_CAP_MAX_NEXT_HOPS:
+			attr->value.u64 = 4099;
+			break;
+		case FAL_SWITCH_ATTR_CAP_MAX_ACL_ENTRIES:
+			attr->value.u64 = 1031;
+			break;
+		case FAL_SWITCH_ATTR_CAP_MAX_TUNNELS:
+			attr->value.u64 = 257;
+			break;
+
+		case FAL_SWITCH_ATTR_BACKEND_NAME:
+			attr->value.ptr = "fal-test";
+			break;
+		case FAL_SWITCH_ATTR_OFFLOAD_FEATURES:
+			attr->value.ptr = "none,test-only";
+			break;
 		default:
 			ERROR("%s(%d): unknown switch attribute %d\n",
 			      __func__, attr_count, attr->id);

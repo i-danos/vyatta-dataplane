@@ -16,6 +16,7 @@
 #include "route.h"
 #include "vplane_log.h"
 #include "fal.h"
+#include "fal_capability.h"
 #include "ipmc_pd_show.h"
 #include "vrf_internal.h"
 #include "qos.h"
@@ -115,7 +116,16 @@ static int pd_show_dataplane(FILE *f, const char *name,
 
 		if (show_hw) {
 			stats = cmd->get_hw_stats();
-			rc = pd_show_obj(wr, "hw", stats);
+			/*
+			 * The backend's own name, not the literal "hw". An
+			 * anonymous lane can say that something offloaded an
+			 * object but not which of several did, and "which" is
+			 * the whole content of a backend preference or an
+			 * offload policy. fal_backend_name() falls back to a
+			 * name rather than to NULL, so this line has a value
+			 * even from a backend that answers nothing else.
+			 */
+			rc = pd_show_obj(wr, fal_backend_name(), stats);
 			if (rc)
 				RTE_LOG(ERR, DATAPLANE,
 					"failed to get HW PD stats for %s\n",

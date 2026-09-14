@@ -67,6 +67,7 @@ check_tests = [
         'dp_test_driver_conf.c',
         'dp_test_esp.c',
         'dp_test_fails.c',
+        'dp_test_fal_capability.c',
         'dp_test_gpc_pb.c',
         'dp_test_gre.c',
         'dp_test_gre6.c',

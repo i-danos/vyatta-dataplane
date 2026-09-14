@@ -1978,6 +1978,100 @@ enum fal_switch_attr_t {
 	 * @default 255
 	 */
 	FAL_SWITCH_ATTR_MPLS_PIPE_TTL,
+
+	/*
+	 * Capability: what this backend can offload at all.
+	 *
+	 * Every attribute above this point is either a scale limit or a knob
+	 * for a feature already assumed present. None of them answers whether
+	 * the backend does a thing in the first place, so the only way to find
+	 * out has been to program an object and read PD_OBJ_STATE_NO_SUPPORT
+	 * afterwards. That answer is true but arrives after the attempt, which
+	 * is no use to anything choosing a backend before programming.
+	 *
+	 * These are backend capabilities, not system capabilities. The
+	 * question each answers is "can this backend offload X", never "can
+	 * this box do X" -- the software data path does VXLAN, MPLS, ACLs and
+	 * QoS whatever any backend says, and with no backend loaded every one
+	 * of these is false while all of those features keep working.
+	 *
+	 * Declared capability and observed outcome stay separate facts, and
+	 * both are wanted. A backend that declares VXLAN and then returns
+	 * NO_RESOURCE at tunnel four thousand has told the truth twice.
+	 *
+	 * @type .booldata
+	 * @flags READ_ONLY
+	 * @default false
+	 */
+	FAL_SWITCH_ATTR_CAP_IPV4,
+	FAL_SWITCH_ATTR_CAP_IPV6,
+	FAL_SWITCH_ATTR_CAP_VRF,
+	FAL_SWITCH_ATTR_CAP_VLAN,
+	FAL_SWITCH_ATTR_CAP_QINQ,
+	FAL_SWITCH_ATTR_CAP_MPLS,
+	FAL_SWITCH_ATTR_CAP_VXLAN,
+	FAL_SWITCH_ATTR_CAP_EVPN,
+	FAL_SWITCH_ATTR_CAP_ACL,
+	FAL_SWITCH_ATTR_CAP_QOS,
+	FAL_SWITCH_ATTR_CAP_MULTICAST,
+
+	/**
+	 * @brief Whether this backend offloads to hardware at all
+	 *
+	 * False for a backend that is another software forwarder. That is a
+	 * legitimate backend and the distinction is worth carrying: it is the
+	 * difference between "programmed somewhere else" and "programmed in
+	 * hardware", which an operator reading offload counters needs.
+	 *
+	 * @type .booldata
+	 * @flags READ_ONLY
+	 * @default false
+	 */
+	FAL_SWITCH_ATTR_CAP_HW_OFFLOAD,
+
+	/*
+	 * Capability: how much of each the backend holds. Zero means the
+	 * backend declines to say, not that it holds none -- a limit of zero
+	 * for a feature it declared is a contradiction the caller should
+	 * ignore rather than act on.
+	 *
+	 * @type .u64
+	 * @flags READ_ONLY
+	 * @default 0
+	 */
+	FAL_SWITCH_ATTR_CAP_MAX_ROUTES,
+	FAL_SWITCH_ATTR_CAP_MAX_NEXT_HOPS,
+	FAL_SWITCH_ATTR_CAP_MAX_ACL_ENTRIES,
+	FAL_SWITCH_ATTR_CAP_MAX_TUNNELS,
+
+	/**
+	 * @brief What this backend calls itself
+	 *
+	 * A NUL-terminated string owned by the backend and valid for as long
+	 * as it is loaded. Without it a backend is anonymous, and per-object
+	 * state can say only that "hw" programmed an object rather than which
+	 * of several did -- which is what a preference or offload policy needs
+	 * in order to mean anything.
+	 *
+	 * @type .ptr
+	 * @flags READ_ONLY
+	 */
+	FAL_SWITCH_ATTR_BACKEND_NAME,
+
+	/**
+	 * @brief Offload features this backend provides, as free-form names
+	 *
+	 * A NUL-terminated, comma-separated list -- "rss,tx-checksum,vxlan".
+	 * Deliberately unstructured: the set is open (rte_flow steering, crypto
+	 * offload, metering, whatever a SmartNIC adds next) and an enum would
+	 * have to be extended before a backend could report anything new. This
+	 * is for display and for operators, not for dispatch; anything the data
+	 * path branches on gets a CAP attribute above.
+	 *
+	 * @type .ptr
+	 * @flags READ_ONLY
+	 */
+	FAL_SWITCH_ATTR_OFFLOAD_FEATURES,
 };
 
 /*

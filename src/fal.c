@@ -18,6 +18,7 @@
 
 #include "compiler.h"
 #include "fal.h"
+#include "fal_capability.h"
 #include "fal_plugin.h"
 #include "fal_bfd.h"
 #include "if_var.h"
@@ -738,6 +739,13 @@ void fal_init_plugins(void)
 	/* load plugin from platform.conf (if set) */
 	if (platform_cfg.fal_plugin)
 		fal_init_plugin(platform_cfg.fal_plugin);
+
+	/*
+	 * Ask whatever loaded what it can do, once. Unconditional: with no
+	 * plugin this resets the cache to the no-offload state, which is the
+	 * correct answer rather than an absent one.
+	 */
+	fal_capability_refresh();
 }
 
 void fal_register_message_handler(struct message_handler *handler)
@@ -837,6 +845,16 @@ int cmd_fal(FILE *f, int argc, char **argv)
 		 */
 		return call_handler_ret(sys, command_ret, f, argc, argv);
 	}
+	/*
+	 * A subcommand here rather than a second top-level "fal" entry in
+	 * cmd_table. find_cmd() returns the first match, so a duplicate name
+	 * is not a conflict that anything reports -- it is dead code, and the
+	 * command it shadows answers instead. That is how this was first
+	 * written, and the symptom was "fal show" returning an error from a
+	 * handler that had never heard of "show".
+	 */
+	if ((streq(argv[0], "capability")))
+		return cmd_fal_capability(f, argc, argv);
 
 	return -1;
 }
