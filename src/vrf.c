@@ -19,6 +19,7 @@
 #include <string.h>
 #include <urcu/uatomic.h>
 
+#include "dpa_object.h"
 #include "compiler.h"
 #include "crypto/vti.h"
 #include "dp_event.h"
@@ -207,7 +208,8 @@ static void vrf_find_saved_tablemap(struct vrf *vrf)
 }
 
 static struct vrf *
-vrf_alloc(vrfid_t vrf_id, fal_object_t vrf_obj, enum pd_obj_state pd_state)
+vrf_alloc(vrfid_t vrf_id, fal_object_t vrf_obj,
+	  struct pd_obj_state_and_flags pd_state)
 {
 	struct vrf *vrf_var;
 
@@ -252,7 +254,7 @@ vrf_alloc(vrfid_t vrf_id, fal_object_t vrf_obj, enum pd_obj_state pd_state)
 		}
 	}
 
-	vrf_table_hw_stats[vrf_var->v_pd_state]++;
+	vrf_table_hw_stats[vrf_var->v_pd_state.state]++;
 
 	return vrf_var;
 err:
@@ -271,7 +273,7 @@ vrf_create(vrfid_t vrf_id)
 			.value.u32 = vrf_id,
 		},
 	};
-	enum pd_obj_state pd_state;
+	struct pd_obj_state_and_flags pd_state = { 0 };
 	fal_object_t vrf_obj;
 	struct vrf *vrf_var;
 	int ret;
@@ -287,7 +289,7 @@ vrf_create(vrfid_t vrf_id)
 	if (ret < 0 && ret != -EOPNOTSUPP)
 		DP_LOG_W_VRF(ERR, DATAPLANE, vrf_id,
 			     "FAL create failed: %s\n", strerror(-ret));
-	pd_state = fal_state_to_pd_state(ret);
+	pd_state_set(&pd_state, ret, FAL_OP_GROUP_VRF);
 
 	vrf_var = get_vrf(vrf_id);
 	if (vrf_var) {
@@ -383,7 +385,7 @@ void vrf_delete_by_ptr(struct vrf *vrf)
 				     "FAL delete failed: %s\n",
 				     strerror(-ret));
 	}
-	vrf_table_hw_stats[vrf->v_pd_state]--;
+	vrf_table_hw_stats[vrf->v_pd_state.state]--;
 
 	call_rcu(&vrf->rcu, vrf_destroy);
 }
@@ -702,6 +704,31 @@ uint32_t *vrf_table_hw_stats_get(void)
 	return vrf_table_hw_stats;
 }
 
+int vrf_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
+{
+	struct vrf *vrf;
+	vrfid_t vrf_id;
+	char key[32];
+
+	for (vrf_id = 0; vrf_id < ARRAY_SIZE(vrf_table); vrf_id++) {
+		if (vrf_id == VRF_INVALID_ID)
+			continue;
+
+		vrf = rcu_dereference(vrf_table[vrf_id]);
+		if (!vrf)
+			continue;
+
+		if (subset != PD_OBJ_STATE_LAST &&
+		    subset != vrf->v_pd_state.state)
+			continue;
+
+		snprintf(key, sizeof(key), "vrf:%u", vrf->v_external_id);
+		dpa_object_emit(json, "vrf", key, &vrf->v_pd_state);
+	}
+
+	return 0;
+}
+
 int vrf_table_get_pd_subset_data(json_writer_t *json,
 				 enum pd_obj_state subset)
 {
@@ -725,7 +752,7 @@ int vrf_table_get_pd_subset_data(json_writer_t *json,
 			continue;
 
 		if (subset != PD_OBJ_STATE_LAST &&
-		    subset != vrf->v_pd_state)
+		    subset != vrf->v_pd_state.state)
 			continue;
 
 		jsonw_start_object(json);

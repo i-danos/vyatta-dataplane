@@ -7,6 +7,7 @@
 #ifndef DPA_OBJECT_H
 #define DPA_OBJECT_H
 
+#include <stdint.h>
 #include <stdio.h>
 
 #include "json_writer.h"
@@ -52,6 +53,17 @@ struct dpa_obj_class {
 	const char *not_enumerable;
 };
 
+/*
+ * Emit one object whose state and backend are not carried in a
+ * struct pd_obj_state_and_flags -- the MPLS label table packs them into
+ * bitfields, and the multicast forwarding cache keeps them as two named
+ * fields. Same four output fields either way; the caller having a different
+ * container is not something a reader should have to know about.
+ */
+void dpa_object_emit_raw(json_writer_t *json, const char *class_name,
+			 const char *key, enum pd_obj_state state,
+			 uint16_t backend);
+
 /* Emit one object in the uniform shape. */
 void dpa_object_emit(json_writer_t *json, const char *class_name,
 		     const char *key,
@@ -63,5 +75,10 @@ int cmd_dpa(FILE *f, int argc, char **argv);
 /* Per-class enumeration, uniform shape. */
 int route_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset);
 int route6_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset);
+int vrf_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset);
+int mpls_label_table_get_dpa_objects(json_writer_t *json,
+				     enum pd_obj_state subset);
+int mroute_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset);
+int mroute6_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset);
 
 #endif /* DPA_OBJECT_H */

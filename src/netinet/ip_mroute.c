@@ -93,6 +93,7 @@
 #include <rte_mbuf.h>
 #include <rte_timer.h>
 
+#include "dpa_object.h"
 #include "dp_event.h"
 #include "if/gre.h"
 #include "if_var.h"
@@ -207,6 +208,38 @@ static void rt_show_subset(struct vrf *vrf, struct mfc *rt, void *arg)
 /*
  * Return the json for the given subset of stats.
  */
+int mroute_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
+{
+	struct cds_lfht_iter iter;
+	struct mfc *rt;
+	vrfid_t vrf_id;
+	struct vrf *vrf;
+	char src[INET_ADDRSTRLEN], grp[INET_ADDRSTRLEN];
+	char key[80];
+
+	VRF_FOREACH(vrf, vrf_id) {
+		struct mcast_vrf mvrf = vrf->v_mvrf4;
+
+		cds_lfht_for_each_entry(mvrf.mfchashtbl, &iter, rt, node) {
+			if (subset != PD_OBJ_STATE_LAST &&
+			    subset != rt->mfc_pd_state)
+				continue;
+
+			snprintf(key, sizeof(key), "vrf:%u/(%s,%s)",
+				 dp_vrf_get_external_id(vrf->v_id),
+				 inet_ntop(AF_INET, &rt->mfc_origin,
+					   src, sizeof(src)),
+				 inet_ntop(AF_INET, &rt->mfc_mcastgrp,
+					   grp, sizeof(grp)));
+			dpa_object_emit_raw(json, "mroute", key,
+					    rt->mfc_pd_state,
+					    rt->mfc_pd_backend);
+		}
+	}
+
+	return 0;
+}
+
 int mroute_get_pd_subset_data(json_writer_t *json, enum pd_obj_state subset)
 {
 	struct cds_lfht_iter iter;
@@ -736,6 +769,8 @@ ip_mroute_add_fal_objects(vrfid_t vrf_id, struct vmfcctl *mfccp, struct mfc *rt)
 
 	if (rt->mfc_fal_obj || rc) {
 		rt->mfc_pd_state = fal_state_to_pd_state(rc);
+		rt->mfc_pd_backend = pd_backend_for(rt->mfc_pd_state,
+						    FAL_OP_GROUP_IPMC);
 		mroute_hw_stats[old_pd_state]--;
 		mroute_hw_stats[rt->mfc_pd_state]++;
 	}
@@ -793,6 +828,7 @@ int add_mfc(vrfid_t vrf_id, struct vmfcctl *mfccp)
 
 	init_mfc_params(vrf_id, rt, mfccp);
 	rt->mfc_pd_state = PD_OBJ_STATE_NOT_NEEDED;
+	rt->mfc_pd_backend = PD_BACKEND_NONE;
 	mroute_hw_stats[rt->mfc_pd_state]++;
 
 	/* insert new entry at head of hash chain */

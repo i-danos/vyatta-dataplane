@@ -175,7 +175,15 @@ struct mfc {
 	uint64_t	mfc_punted;		/* # of packets punted       */
 	uint64_t	mfc_punts_dropped;	/* # of punts dropped        */
 	uint64_t	mfc_punt;		/* punt all packets          */
-	enum pd_obj_state mfc_pd_state;		/* platform dependent state  */
+	enum pd_obj_state mfc_pd_state;	/* platform dependent state  */
+	/*
+	 * Which backend holds it, from pd_backend_for() -- the same rule
+	 * the struct carriers use, so the two cannot disagree. A separate
+	 * field rather than a struct pd_obj_state_and_flags because this
+	 * one is reached by name from a dozen places and widening it there
+	 * buys nothing the extra field does not.
+	 */
+	uint16_t	mfc_pd_backend;
 	fal_object_t	mfc_fal_obj;		/* fal object                */
 	fal_object_t	mfc_fal_rpf;		/* fal rpf group object      */
 	struct fal_object_list_t *mfc_fal_rpf_lst;/* fal rpf members object  */
