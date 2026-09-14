@@ -125,7 +125,7 @@ static int pd_show_dataplane(FILE *f, const char *name,
 			 * name rather than to NULL, so this line has a value
 			 * even from a backend that answers nothing else.
 			 */
-			rc = pd_show_obj(wr, fal_backend_name(), stats);
+			rc = pd_show_obj(wr, fal_backend_name(0), stats);
 			if (rc)
 				RTE_LOG(ERR, DATAPLANE,
 					"failed to get HW PD stats for %s\n",

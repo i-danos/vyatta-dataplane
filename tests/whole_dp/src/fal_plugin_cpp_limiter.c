@@ -298,29 +298,35 @@ int fal_plugin_get_switch_attribute(uint32_t attr_count,
 			break;
 
 		/*
-		 * Capability. A deliberately *mixed* set: IPv4 yes and IPv6
-		 * no, VXLAN yes and MPLS no.
+		 * Capability, and it has teeth: dispatch sends an op group
+		 * only to a backend that declares the matching capability, so
+		 * declaring false here stops those ops arriving.
 		 *
-		 * All-true and all-false are both indistinguishable from a
-		 * stub that ignores the attribute id and returns a constant,
-		 * and all-false is specifically what a broken id mapping
-		 * produces, because an unknown id returns an error here and
-		 * the caller's query then defaults to false. A capability
-		 * model whose test cannot separate those from a real answer
-		 * is not being tested.
+		 * Which means the declaration has to match what this plugin
+		 * actually implements, and the first version did not. It
+		 * declared qos false while implementing twenty-five QoS entry
+		 * points, chosen only to make a mixed set for the selection
+		 * test -- and QoS counters then read zero, because the ops
+		 * were correctly not being sent to a backend that had said it
+		 * does not do QoS.
+		 *
+		 * True for the groups with entry points in this plugin -- ip,
+		 * bridge/vlan, qos. False for the rest, which have none; the
+		 * complement lives in fal_plugin_test_b.c so that selection
+		 * still has something to discriminate between.
 		 */
 		case FAL_SWITCH_ATTR_CAP_IPV4:
-		case FAL_SWITCH_ATTR_CAP_VRF:
 		case FAL_SWITCH_ATTR_CAP_VLAN:
-		case FAL_SWITCH_ATTR_CAP_VXLAN:
-		case FAL_SWITCH_ATTR_CAP_ACL:
+		case FAL_SWITCH_ATTR_CAP_QOS:
 			attr->value.booldata = true;
 			break;
 		case FAL_SWITCH_ATTR_CAP_IPV6:
+		case FAL_SWITCH_ATTR_CAP_VRF:
 		case FAL_SWITCH_ATTR_CAP_QINQ:
 		case FAL_SWITCH_ATTR_CAP_MPLS:
+		case FAL_SWITCH_ATTR_CAP_VXLAN:
 		case FAL_SWITCH_ATTR_CAP_EVPN:
-		case FAL_SWITCH_ATTR_CAP_QOS:
+		case FAL_SWITCH_ATTR_CAP_ACL:
 		case FAL_SWITCH_ATTR_CAP_MULTICAST:
 		/*
 		 * This plugin records what the data plane hands it and

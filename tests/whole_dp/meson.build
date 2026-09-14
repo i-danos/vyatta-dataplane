@@ -254,6 +254,22 @@ fal_test_plugin = shared_module('fal_plugin_test',
         install_dir: get_option('prefix') / get_option('libdir') / meson.project_name()
 )
 
+fal_test_plugin_b = shared_module('fal_plugin_test_b',
+        sources: files('src/fal_plugin_test_b.c'),
+        dependencies: [dpdk_dep],
+        include_directories: [public_include, internal_inc],
+        override_options: [
+                'optimization=0',
+                'b_lto=false'
+        ],
+        c_args: [
+                '-Wno-unused-parameter'
+        ],
+        gnu_symbol_visibility: 'hidden',
+        name_prefix: '',
+        install: false
+)
+
 test_driver_config = configure_file(
         input: '../../dataplane-drivers-default.conf',
         output: 'dataplane-drivers-default.conf',
@@ -306,7 +322,7 @@ foreach suite : check_tests + ['dp_test_pipeline.c']
         suite_env = ['CK_RUN_SUITE=@0@'.format(suite), 'CK_XML_LOG_FILE_NAME=test_@0@.xml'.format(suite)] + dataplane_test_env
 
         test(suite, dataplane_test,
-                depends: [sample_plugin, sample_test_plugin, fal_test_plugin, dummyfs],
+                depends: [sample_plugin, sample_test_plugin, fal_test_plugin, fal_test_plugin_b, dummyfs],
                 workdir: meson.current_build_dir(),
                 args: ['-l @0@'.format(lcore_number), '-d1', '-F', meson.build_root() / 'src/pipeline/nodes/sample', '-P', meson.current_build_dir()],
                 env: suite_env,

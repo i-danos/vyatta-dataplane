@@ -114,7 +114,85 @@ fal_free_deferred(void *ptr)
 	call_rcu(&fal_mem->rcu, fal_free_worker);
 }
 
-static struct message_handler *fal_handler;
+/*
+ * The loaded backends.
+ *
+ * This was a single "struct message_handler *fal_handler", and the assert in
+ * fal_register_message_handler() said so. One backend can be told apart from
+ * no backend, and nothing else: a preference order or an offload policy needs
+ * something to prefer *between*, and per-object state that records which
+ * backend programmed an object needs there to be more than one answer.
+ *
+ * Four, because pd_obj_state_and_flags reserves four bits for a backend index
+ * and a table larger than the field that has to record it would be a trap.
+ */
+#define FAL_MAX_BACKENDS 4
+
+struct fal_backend {
+	struct message_handler *handler;
+	void *lib;
+};
+
+static struct fal_backend fal_backends[FAL_MAX_BACKENDS];
+static unsigned int fal_n_backends;
+
+/*
+ * Which backend a message_handler registration belongs to. Registration
+ * happens deep inside plugin load, from a function that is handed only the
+ * dlopen handle, so the slot is claimed before the load and read here rather
+ * than threaded through six call frames.
+ */
+static int fal_loading_backend = -1;
+
+struct message_handler *fal_backend_handler(unsigned int idx)
+{
+	if (idx >= fal_n_backends)
+		return NULL;
+
+	return fal_backends[idx].handler;
+}
+
+unsigned int fal_backend_count(void)
+{
+	return fal_n_backends;
+}
+
+/*
+ * Does backend `idx` have any entry point at all in this op group?
+ *
+ * A declared capability and an implemented op group are two separate claims by
+ * the same backend, and nothing made them agree. The first mixed capability
+ * set written for the test plugin declared qos false while that plugin
+ * implements twenty-five QoS entry points, and the consequence was silent in
+ * the worst way: dispatch correctly stopped sending QoS ops to a backend that
+ * had said it does not do QoS, and the counters read zero.
+ *
+ * So the two claims are compared once at load and a disagreement is logged.
+ * Not refused -- a backend that implements ops it does not advertise is odd
+ * but not unsafe, and one that advertises a group it has not implemented gets
+ * NULL entry points and the software path, which is also not unsafe. What is
+ * harmful is neither of those happening quietly.
+ */
+bool fal_backend_implements(unsigned int idx, enum fal_op_group group)
+{
+	struct message_handler *h = fal_backend_handler(idx);
+
+	if (!h)
+		return false;
+
+	switch (group) {
+	case FAL_OP_GROUP_IP:	return h->ip != NULL;
+	case FAL_OP_GROUP_IPMC:	return h->ipmc != NULL;
+	case FAL_OP_GROUP_ACL:	return h->acl != NULL;
+	case FAL_OP_GROUP_QOS:	return h->qos != NULL;
+	case FAL_OP_GROUP_MPLS:	return h->mpls != NULL;
+	case FAL_OP_GROUP_TUN:	return h->tun != NULL;
+	case FAL_OP_GROUP_VLAN:	return h->bridge != NULL || h->vlan != NULL;
+	case FAL_OP_GROUP_VRF:	return h->vrf != NULL;
+	}
+
+	return false;
+}
 
 void fal_init(void)
 {
@@ -719,6 +797,14 @@ static void fal_setup_plugin_interfaces(void *lib)
 static void fal_init_plugin(const char *plugin)
 {
 	DP_DEBUG(INIT, INFO, FAL, "Initializing plugin: %s\n", plugin);
+
+	if (fal_n_backends >= FAL_MAX_BACKENDS) {
+		RTE_LOG(ERR, DATAPLANE,
+			"FAL: no slot for backend %s, %u already loaded\n",
+			plugin, fal_n_backends);
+		return;
+	}
+
 	void *lib = dlopen(plugin, RTLD_LAZY);
 	if (!lib) {
 		DP_DEBUG(INIT, ERR, FAL, "%s\n", dlerror());
@@ -730,15 +816,52 @@ static void fal_init_plugin(const char *plugin)
 	if (plugin_init(lib) < 0)
 		return;
 
+	fal_loading_backend = fal_n_backends;
+	fal_backends[fal_loading_backend].lib = lib;
 	register_dyn_msg_handlers(lib);
+	/*
+	 * Commit the slot only if something registered into it. A plugin that
+	 * loads, initialises and registers nothing is not a backend, and
+	 * counting it would give the capability query a slot with no handler
+	 * to ask -- which reads as a backend that declines every capability
+	 * rather than as one that is not there.
+	 */
+	if (fal_backends[fal_loading_backend].handler)
+		fal_n_backends++;
+	else
+		fal_backends[fal_loading_backend].lib = NULL;
+	fal_loading_backend = -1;
+
 	fal_setup_plugin_interfaces(lib);
 }
 
 void fal_init_plugins(void)
 {
-	/* load plugin from platform.conf (if set) */
-	if (platform_cfg.fal_plugin)
-		fal_init_plugin(platform_cfg.fal_plugin);
+	/*
+	 * platform.conf's fal_plugin is a comma-separated list. A single path
+	 * is the same thing with one element, so every existing configuration
+	 * keeps working unchanged -- and the order written is the preference
+	 * order, which is the only place an operator can express one.
+	 */
+	if (platform_cfg.fal_plugin) {
+		char *list = strdup(platform_cfg.fal_plugin);
+		char *saveptr = NULL;
+		char *path;
+
+		if (!list) {
+			RTE_LOG(ERR, DATAPLANE, "FAL: out of memory\n");
+			return;
+		}
+
+		for (path = strtok_r(list, ",", &saveptr); path;
+		     path = strtok_r(NULL, ",", &saveptr)) {
+			while (*path == ' ' || *path == '\t')
+				path++;
+			if (*path)
+				fal_init_plugin(path);
+		}
+		free(list);
+	}
 
 	/*
 	 * Ask whatever loaded what it can do, once. Unconditional: with no
@@ -750,8 +873,20 @@ void fal_init_plugins(void)
 
 void fal_register_message_handler(struct message_handler *handler)
 {
-	assert(!fal_handler);
-	fal_handler = handler;
+	/*
+	 * Registration lands in the slot the loader claimed. A registration
+	 * with no slot claimed is a plugin registering outside fal_init_plugin(),
+	 * which nothing does today -- refuse it rather than silently making it
+	 * backend zero and displacing a real one.
+	 */
+	if (fal_loading_backend < 0) {
+		RTE_LOG(ERR, DATAPLANE,
+			"FAL handler registered outside plugin load; ignored\n");
+		return;
+	}
+
+	assert(!fal_backends[fal_loading_backend].handler);
+	fal_backends[fal_loading_backend].handler = handler;
 }
 
 static void free_message_handler(struct message_handler *handler)
@@ -777,23 +912,93 @@ static void free_message_handler(struct message_handler *handler)
 	free(handler);
 }
 
-void fal_delete_message_handler(struct message_handler *handler __unused)
+void fal_delete_message_handler(struct message_handler *handler)
 {
-	assert(fal_handler == handler);
-	free_message_handler(fal_handler);
-	fal_handler = NULL;
+	unsigned int b;
+
+	/*
+	 * Find the slot by handler rather than asserting it is the only one.
+	 * Slots above the removed one shift down, because the index is the
+	 * preference order and a hole in it would silently change which
+	 * backend wins a selection.
+	 */
+	for (b = 0; b < fal_n_backends; b++)
+		if (fal_backends[b].handler == handler)
+			break;
+
+	assert(b < fal_n_backends);
+	if (b >= fal_n_backends)
+		return;
+
+	free_message_handler(fal_backends[b].handler);
+
+	for (; b + 1 < fal_n_backends; b++)
+		fal_backends[b] = fal_backends[b + 1];
+
+	fal_backends[b].handler = NULL;
+	fal_backends[b].lib = NULL;
+	fal_n_backends--;
+
+	fal_capability_refresh();
 }
 
 bool fal_plugins_present(void)
 {
-	return fal_handler != NULL;
+	return fal_n_backends != 0;
 }
+
+/*
+ * Which capability each op group needs, so that dispatch can pick a backend
+ * that declares it.
+ *
+ * The groups with no entry -- ports, router interfaces, LAG, STP, mirroring,
+ * BFD, the switch itself -- get FAL_CAP_LAST, which selects the first loaded
+ * backend. That is exactly what a single backend does today, so nothing about
+ * those paths changes; what it is not is a decision. Whether creating a port
+ * should reach *every* backend that might later hold objects on it is a real
+ * question and this does not answer it, deliberately, rather than answering it
+ * by accident in a macro.
+ *
+ * ip covers v4 and v6 through the same ops, so it can only name one of them
+ * here. Choosing a backend per *object* -- this v6 route to a backend that
+ * declares IPv6, that v4 route to another -- needs the capability at the call
+ * site rather than at the op group, which is 187 call sites and a separate
+ * change.
+ */
+#define FAL_OPCAP_ip		FAL_CAP_IPV4
+#define FAL_OPCAP_ipmc		FAL_CAP_MULTICAST
+#define FAL_OPCAP_acl		FAL_CAP_ACL
+#define FAL_OPCAP_qos		FAL_CAP_QOS
+#define FAL_OPCAP_mpls		FAL_CAP_MPLS
+#define FAL_OPCAP_tun		FAL_CAP_VXLAN
+#define FAL_OPCAP_bridge	FAL_CAP_VLAN
+#define FAL_OPCAP_vlan		FAL_CAP_VLAN
+#define FAL_OPCAP_vlan_feat	FAL_CAP_VLAN
+#define FAL_OPCAP_vrf		FAL_CAP_VRF
+#define FAL_OPCAP_l2		FAL_CAP_LAST
+#define FAL_OPCAP_rif		FAL_CAP_LAST
+#define FAL_OPCAP_lag		FAL_CAP_LAST
+#define FAL_OPCAP_lacp		FAL_CAP_LAST
+#define FAL_OPCAP_stp		FAL_CAP_LAST
+#define FAL_OPCAP_sys		FAL_CAP_LAST
+#define FAL_OPCAP_sw		FAL_CAP_LAST
+#define FAL_OPCAP_mirror	FAL_CAP_LAST
+#define FAL_OPCAP_backplane	FAL_CAP_LAST
+#define FAL_OPCAP_cpp_rl	FAL_CAP_LAST
+#define FAL_OPCAP_capture	FAL_CAP_LAST
+#define FAL_OPCAP_bfd		FAL_CAP_LAST
+#define FAL_OPCAP_policer	FAL_CAP_LAST
+#define FAL_OPCAP_ptp		FAL_CAP_LAST
+
+#define fal_op_handler(op_type)						\
+	fal_backend_handler(fal_backend_select(FAL_OPCAP_ ## op_type))
 
 #define call_handler(op_type, fn, args...)				\
 	{								\
+		struct message_handler *h = fal_op_handler(op_type);	\
 		struct fal_ ## op_type ## _ops *interface = NULL;	\
-		if (fal_handler) {					\
-			interface = fal_handler->op_type;		\
+		if (h) {						\
+			interface = h->op_type;				\
 			if (interface && interface->fn)			\
 				interface->fn(args);			\
 		}							\
@@ -801,10 +1006,11 @@ bool fal_plugins_present(void)
 
 #define call_handler_def_ret(op_type, def_ret, fn, args...)		\
 	({								\
+		struct message_handler *h = fal_op_handler(op_type);	\
 		struct fal_ ## op_type ## _ops *interface = NULL;	\
 		int ret = def_ret;					\
-		if (fal_handler) {					\
-			interface = fal_handler->op_type;		\
+		if (h) {						\
+			interface = h->op_type;				\
 			if (interface && interface->fn)			\
 				ret = interface->fn(args);		\
 		}							\
@@ -872,11 +1078,12 @@ int fal_l2_get_attrs(unsigned int if_index,
 		     uint32_t attr_count,
 		     struct fal_attribute_t *attr_list)
 {
+	struct message_handler *h = fal_op_handler(l2);
 	struct fal_l2_ops *interface;
 	int rc = -1;
 
-	if (fal_handler) {
-		interface = fal_handler->l2;
+	if (h) {
+		interface = h->l2;
 		if (interface && interface->get_attrs)
 			rc = interface->get_attrs(if_index,
 						  attr_count,
@@ -1288,6 +1495,25 @@ int fal_get_switch_attrs(uint32_t attr_count,
 {
 	return call_handler_def_ret(
 		sw, -EOPNOTSUPP, get_attribute, attr_count, attr_list);
+}
+
+/*
+ * The same query aimed at one named backend.
+ *
+ * fal_get_switch_attrs() goes wherever dispatch sends it, which is right for a
+ * caller asking "what is my burst size" and wrong for the capability scan,
+ * whose whole job is to ask each backend separately. Asking through dispatch
+ * would answer for one backend and record it against all of them.
+ */
+int fal_get_switch_attrs_backend(unsigned int idx, uint32_t attr_count,
+				 struct fal_attribute_t *attr_list)
+{
+	struct message_handler *h = fal_backend_handler(idx);
+
+	if (!h || !h->sw || !h->sw->get_attribute)
+		return -EOPNOTSUPP;
+
+	return h->sw->get_attribute(attr_count, attr_list);
 }
 
 int fal_set_switch_attr(const struct fal_attribute_t *attr)
@@ -2048,8 +2274,10 @@ static int fal_ip_new_route(unsigned int vrf_id,
 	 * If using route handler that takes a VRF object but no VRF
 	 * object created then return an error.
 	 */
+	struct message_handler *iph = fal_op_handler(ip);
+
 	if (vrf_obj == FAL_NULL_OBJECT_ID &&
-	    fal_handler && fal_handler->ip && fal_handler->ip->new_route)
+	    iph && iph->ip && iph->ip->new_route)
 		return -EINVAL;
 
 	ret = call_handler_def_ret(
@@ -2140,8 +2368,10 @@ static int fal_ip_get_route_attrs(unsigned int vrf_id,
 	 * If using route handler that takes a VRF object but no VRF
 	 * object created then return an error.
 	 */
+	struct message_handler *iph = fal_op_handler(ip);
+
 	if (vrf_obj == FAL_NULL_OBJECT_ID &&
-	    fal_handler && fal_handler->ip && fal_handler->ip->get_route_attrs)
+	    iph && iph->ip && iph->ip->get_route_attrs)
 		return -EINVAL;
 
 	ret = call_handler_def_ret(
