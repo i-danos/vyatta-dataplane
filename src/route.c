@@ -2679,7 +2679,8 @@ static void rt_dpa_emit(struct lpm *lpm, struct vrf *vrf,
 		 vrf_get_external_name(vrf->v_id), lpm_get_id(lpm),
 		 inet_ntop(AF_INET, &dst, addr, sizeof(addr)), params->depth);
 
-	dpa_object_emit(w->json, "route", key, pd_state);
+	dpa_object_emit_owned(w->json, "route", key, pd_state,
+			      rt_is_reserved(params->ip, params->depth, params->scope));
 }
 
 int route_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)

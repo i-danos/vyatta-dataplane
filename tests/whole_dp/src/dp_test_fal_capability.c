@@ -385,3 +385,45 @@ DP_START_TEST(fal_cap, pd_subset_lists_objects)
 	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
 
 } DP_END_TEST;
+
+/*
+ * The object view says which objects the data plane made for itself.
+ *
+ * 127.0.0.0/8, 255.255.255.255/32 and the reject default are reserved routes:
+ * they exist in the forwarding table and correctly have no counterpart
+ * upstream. Something comparing the two sides has to tell them from objects
+ * that went missing, or a reconciliation loop would try to repair 127.0.0.0/8
+ * by asking zebra for a route zebra was never going to have.
+ *
+ * Asserted with a configured route in the same breath, because "everything is
+ * owned" and "nothing is owned" are both indistinguishable from a field wired
+ * to a constant.
+ */
+DP_START_TEST(fal_cap, dpa_object_marks_dataplane_owned)
+{
+	json_object *expected;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+	dp_test_netlink_add_route("10.76.0.0/24 nh 1.1.1.2 int:dp1T0");
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"dpa_objects\": {"
+		"        \"objects\": ["
+		"            { \"key\": \"vrf:default/table:254/127.0.0.0/8\","
+		"              \"dataplane_owned\": true },"
+		"            { \"key\": \"vrf:default/table:254/255.255.255.255/32\","
+		"              \"dataplane_owned\": true },"
+		"            { \"key\": \"vrf:default/table:254/10.76.0.0/24\","
+		"              \"dataplane_owned\": false }"
+		"        ]"
+		"    }"
+		"}");
+	dp_test_check_json_state("dpa object show route", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+	dp_test_netlink_del_route("10.76.0.0/24 nh 1.1.1.2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+
+} DP_END_TEST;

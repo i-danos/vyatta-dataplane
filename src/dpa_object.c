@@ -63,6 +63,29 @@ void dpa_object_emit(json_writer_t *json, const char *class_name,
 			    pd_state->backend);
 }
 
+void dpa_object_emit_owned(json_writer_t *json, const char *class_name,
+			   const char *key,
+			   const struct pd_obj_state_and_flags *pd_state,
+			   bool owned)
+{
+	jsonw_start_object(json);
+	jsonw_string_field(json, "class", class_name);
+	jsonw_string_field(json, "key", key);
+	jsonw_string_field(json, "state", pd_obj_state_name(pd_state->state));
+	jsonw_string_field(json, "backend",
+			   pd_state->backend == PD_BACKEND_NONE ?
+			   "sw-dataplane" : fal_backend_name(pd_state->backend));
+	/*
+	 * Emitted always, not only when true. A field that appears only on
+	 * some objects makes its absence ambiguous between "not owned" and
+	 * "this producer does not report ownership", and a reader cannot tell
+	 * those apart -- which is the same confusion the class list exists to
+	 * prevent one level up.
+	 */
+	jsonw_bool_field(json, "dataplane_owned", owned);
+	jsonw_end_object(json);
+}
+
 static int dpa_object_show(FILE *f, const char *name, enum pd_obj_state subset)
 {
 	const struct dpa_obj_class *cls;

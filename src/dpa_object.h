@@ -7,6 +7,7 @@
 #ifndef DPA_OBJECT_H
 #define DPA_OBJECT_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -64,7 +65,28 @@ void dpa_object_emit_raw(json_writer_t *json, const char *class_name,
 			 const char *key, enum pd_obj_state state,
 			 uint16_t backend);
 
-/* Emit one object in the uniform shape. */
+/*
+ * Emit one object in the uniform shape.
+ *
+ * `owned` marks an object the data plane created for itself rather than one it
+ * was told about. Those exist in the forwarding table and correctly have no
+ * counterpart upstream, so anything comparing the two sides has to be able to
+ * tell them from objects that went missing -- otherwise a reconciliation loop
+ * would try to "repair" 127.0.0.0/8 by asking zebra for a route zebra was
+ * never going to have.
+ *
+ * The data plane already knows which these are: reserved_routes[] and
+ * rt_is_reserved() in route.c, the same in route_v6.c. The classification is
+ * not invented here, it is carried out to where a reader can see it. Putting
+ * the discriminator in the data is the point -- the alternative is a comparison
+ * tool holding a list of prefixes it believes are special, which is a copy of
+ * this table that nothing keeps in step with it.
+ */
+void dpa_object_emit_owned(json_writer_t *json, const char *class_name,
+			   const char *key,
+			   const struct pd_obj_state_and_flags *pd_state,
+			   bool owned);
+
 void dpa_object_emit(json_writer_t *json, const char *class_name,
 		     const char *key,
 		     const struct pd_obj_state_and_flags *pd_state);

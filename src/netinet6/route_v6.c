@@ -2888,7 +2888,8 @@ static void rt6_dpa_emit(struct vrf *vrf, uint32_t tableid,
 		 inet_ntop(AF_INET6, params->prefix, addr, sizeof(addr)),
 		 params->pr_len);
 
-	dpa_object_emit(w->json, "route6", key, pd_state);
+	dpa_object_emit_owned(w->json, "route6", key, pd_state,
+			      rt6_is_reserved(params->prefix, params->pr_len, params->scope));
 }
 
 int route6_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
