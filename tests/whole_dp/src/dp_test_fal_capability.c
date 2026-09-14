@@ -295,14 +295,54 @@ DP_START_TEST(fal_cap, dpa_object_names_what_it_cannot_walk)
 		"{"
 		"    \"dpa_objects\": {"
 		"        \"classes\": ["
-		"            { \"class\": \"route\",  \"enumerable\": true },"
-		"            { \"class\": \"route6\", \"enumerable\": true },"
-		"            { \"class\": \"qos-if\", \"enumerable\": false,"
+		"            { \"class\": \"route\",      \"enumerable\": true },"
+		"            { \"class\": \"route6\",     \"enumerable\": true },"
+		"            { \"class\": \"mroute\",     \"enumerable\": true },"
+		"            { \"class\": \"mroute6\",    \"enumerable\": true },"
+		"            { \"class\": \"mpls-route\", \"enumerable\": true },"
+		"            { \"class\": \"vrf\",        \"enumerable\": true },"
+		"            { \"class\": \"qos-if\",     \"enumerable\": false,"
 		"              \"reason\": \"no walker\" }"
 		"        ]"
 		"    }"
 		"}");
 	dp_test_check_json_state("dpa object show", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+} DP_END_TEST;
+
+/*
+ * A class other than route enumerates in the same shape, and agrees with what
+ * the backend declared.
+ *
+ * Six of the eight classes carry their backend in three different containers
+ * -- a struct for routes, bitfields in the MPLS node, two named fields in the
+ * multicast forwarding cache. Which one a class happens to use is exactly what
+ * a uniform view exists to stop a reader having to know.
+ *
+ * The values tie the chain together end to end: fal_plugin_test declares
+ * vrf=false, so dispatch sends no VRF ops to it, fal_vrf_create returns
+ * -EOPNOTSUPP, the state is no_support rather than error, and the backend is
+ * sw-dataplane. Any one of those four disagreeing with the others is a defect,
+ * and asserting them together is what makes that visible.
+ */
+DP_START_TEST(fal_cap, dpa_object_vrf_same_shape)
+{
+	json_object *expected;
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"dpa_objects\": {"
+		"        \"objects\": ["
+		"            { \"class\": \"vrf\","
+		"              \"key\": \"vrf:0\","
+		"              \"state\": \"no_support\","
+		"              \"backend\": \"sw-dataplane\" }"
+		"        ]"
+		"    }"
+		"}");
+	dp_test_check_json_state("dpa object show vrf", expected,
 				 DP_TEST_JSON_CHECK_SUBSET, false);
 	json_object_put(expected);
 

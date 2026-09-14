@@ -28,6 +28,7 @@
 #include <urcu/list.h>
 #include <urcu/uatomic.h>
 
+#include "dpa_object.h"
 #include "fal.h"
 #include "json_writer.h"
 #include "main.h"
@@ -56,7 +57,19 @@ struct label_table_node {
 	uint32_t next_hop; /* idx of output info */
 	uint8_t nh_type;
 	uint8_t payload_type;
-	uint16_t pd_state : 15;
+	/*
+	 * Hand-packed rather than a struct pd_obj_state_and_flags, because
+	 * this node is __rte_cache_aligned and on the data path -- widening
+	 * the field would move the layout. pd_state had fifteen bits for six
+	 * values, so the backend index comes out of that slack and the node is
+	 * byte-for-byte what it was.
+	 *
+	 * The value comes from pd_backend_for(), the same rule the struct
+	 * carriers use, so the two cannot disagree about what to record.
+	 */
+	uint16_t pd_state : 8;
+	uint16_t pd_backend : 4;
+	uint16_t pd_unused : 3;
 	uint16_t pd_created : 1;
 	uint32_t padding1;
 	struct cds_lfht_node node;
@@ -234,13 +247,19 @@ mpls_label_table_fal_create_or_upd(struct label_table_node *label_table_node,
 			}
 		} else
 			label_table_node->pd_created = true;
-		if (update_pd_state)
+		if (update_pd_state) {
 			label_table_node->pd_state = fal_state_to_pd_state(rc);
+			label_table_node->pd_backend = pd_backend_for(
+				label_table_node->pd_state, FAL_OP_GROUP_MPLS);
+		}
 		mpls_route_hw_stats[label_table_node->pd_state]++;
 	} else {
 		rc = fal_set_mpls_route_attr(&fal_mpls_route, &attr_list[0]);
-		if (update_pd_state)
+		if (update_pd_state) {
 			label_table_node->pd_state = fal_state_to_pd_state(rc);
+			label_table_node->pd_backend = pd_backend_for(
+				label_table_node->pd_state, FAL_OP_GROUP_MPLS);
+		}
 		if (rc < 0) {
 			RTE_LOG(ERR, MPLS,
 				"FAL set of label %d forwarding action failed: %s\n",
@@ -251,9 +270,13 @@ mpls_label_table_fal_create_or_upd(struct label_table_node *label_table_node,
 			RTE_LOG(ERR, MPLS,
 				"FAL set of label %d next hop group failed: %s\n",
 				label_table_node->in_label, strerror(-rc));
-			if (update_pd_state)
+			if (update_pd_state) {
 				label_table_node->pd_state =
 					fal_state_to_pd_state(rc);
+				label_table_node->pd_backend = pd_backend_for(
+					label_table_node->pd_state,
+					FAL_OP_GROUP_MPLS);
+			}
 		}
 		mpls_route_hw_stats[label_table_node->pd_state]++;
 	}
@@ -798,6 +821,36 @@ mpls_label_table_set_dump(FILE *fp, int labelspace, uint32_t label_filter)
 	}
 	jsonw_end_array(json);
 	jsonw_destroy(&json);
+}
+
+int mpls_label_table_get_dpa_objects(json_writer_t *json,
+				     enum pd_obj_state subset)
+{
+	struct label_table_set_entry *ls_entry;
+	struct label_table_node *node;
+	struct cds_lfht_iter iter;
+	char key[48];
+
+	cds_list_for_each_entry_rcu(ls_entry, &label_table_set, entry) {
+		if (!ls_entry->label_table)
+			continue;
+
+		dp_rcu_read_lock();
+		cds_lfht_for_each_entry(ls_entry->label_table, &iter, node,
+					node) {
+			if (subset != PD_OBJ_STATE_LAST &&
+			    subset != node->pd_state)
+				continue;
+
+			snprintf(key, sizeof(key), "lblspc:%d/label:%u",
+				 ls_entry->labelspace, node->in_label);
+			dpa_object_emit_raw(json, "mpls-route", key,
+					    node->pd_state, node->pd_backend);
+		}
+		dp_rcu_read_unlock();
+	}
+
+	return 0;
 }
 
 int mpls_label_table_get_pd_subset_data(json_writer_t *json,

@@ -209,21 +209,31 @@ enum pd_obj_state fal_state_to_pd_state(int fal_state)
 	return PD_OBJ_STATE_ERROR;
 }
 
-void pd_state_set(struct pd_obj_state_and_flags *pd, int fal_rc,
-		  enum fal_op_group group)
+uint16_t pd_backend_for(enum pd_obj_state state, enum fal_op_group group)
 {
 	unsigned int be;
 
-	pd->state = fal_state_to_pd_state(fal_rc);
-
-	if (!fal_state_is_obj_present(pd->state)) {
-		pd->backend = PD_BACKEND_NONE;
-		return;
-	}
+	/*
+	 * Only when the object is actually there. A selected backend that
+	 * returned an error did not take the object -- it stayed in software
+	 * -- and naming it would make the report say the opposite of what
+	 * happened.
+	 */
+	if (!fal_state_is_obj_present(state))
+		return PD_BACKEND_NONE;
 
 	be = fal_backend_for_group(group);
-	pd->backend = (be == FAL_BACKEND_NONE || be >= PD_BACKEND_NONE) ?
-		PD_BACKEND_NONE : be;
+	if (be == FAL_BACKEND_NONE || be >= PD_BACKEND_NONE)
+		return PD_BACKEND_NONE;
+
+	return be;
+}
+
+void pd_state_set(struct pd_obj_state_and_flags *pd, int fal_rc,
+		  enum fal_op_group group)
+{
+	pd->state = fal_state_to_pd_state(fal_rc);
+	pd->backend = pd_backend_for(pd->state, group);
 }
 
 bool fal_state_is_obj_present(enum pd_obj_state pd_obj_state)

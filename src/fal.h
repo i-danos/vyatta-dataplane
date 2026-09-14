@@ -722,6 +722,18 @@ unsigned int fal_backend_for_group(enum fal_op_group group);
  * software, and naming it would make the report say the opposite of what
  * happened.
  */
+/*
+ * The backend value to record for an object in this op group that reached this
+ * state -- PD_BACKEND_NONE, or a backend index.
+ *
+ * Exists because not every object carries a struct pd_obj_state_and_flags: the
+ * MPLS label table hand-packs the same two facts into bitfields inside a
+ * cache-aligned data-path node, where widening the field would move the
+ * layout. Those callers need the same rule without the struct, and a second
+ * copy of the rule is a second chance to disagree.
+ */
+uint16_t pd_backend_for(enum pd_obj_state state, enum fal_op_group group);
+
 void pd_state_set(struct pd_obj_state_and_flags *pd, int fal_rc,
 		  enum fal_op_group group);
 

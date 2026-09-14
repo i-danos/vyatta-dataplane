@@ -53,6 +53,16 @@ struct pd_obj_state_and_flags {
 /* pd show dataplane */
 int cmd_pd(FILE *f, int argc, char **argv);
 
+/*
+ * The backend value to record for an object in this op group that reached this
+ * state, as PD_BACKEND_NONE or a backend index.
+ *
+ * Exists because not every object carries a struct pd_obj_state_and_flags: the
+ * MPLS label table hand-packs the same two facts into bitfields inside a
+ * cache-aligned data-path node. Those callers need the same rule without the
+ * struct, and a second copy of the rule is a second chance to disagree -- which
+ * is the mistake this file has already recorded twice.
+ */
 const char *pd_obj_state_name(enum pd_obj_state state);
 enum pd_obj_state pd_obj_state_from_name(const char *name);
 
