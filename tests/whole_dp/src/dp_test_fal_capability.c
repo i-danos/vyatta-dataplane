@@ -240,3 +240,70 @@ DP_START_TEST(fal_cap, route_records_its_backend)
 	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
 
 } DP_END_TEST;
+
+/*
+ * The uniform object view: one shape for every class, and a class list that
+ * says which classes can be walked.
+ *
+ * "pd show dataplane" reports per class, in each class's own terms. That is
+ * right for a person reading routes and wrong for anything comparing what is
+ * programmed against what was asked for, which would have to know every
+ * class's private shape and would learn nothing about a class it had not been
+ * taught.
+ */
+DP_START_TEST(fal_cap, dpa_object_uniform_shape)
+{
+	json_object *expected;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+	dp_test_netlink_add_route("10.74.0.0/24 nh 1.1.1.2 int:dp1T0");
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"dpa_objects\": {"
+		"        \"objects\": ["
+		"            { \"class\": \"route\","
+		"              \"key\": \"vrf:1/table:254/10.74.0.0/24\","
+		"              \"state\": \"full\","
+		"              \"backend\": \"fal-test\" }"
+		"        ]"
+		"    }"
+		"}");
+	dp_test_check_json_state("dpa object show", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+	dp_test_netlink_del_route("10.74.0.0/24 nh 1.1.1.2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+
+} DP_END_TEST;
+
+/*
+ * A class that cannot be walked says so, rather than reporting nothing.
+ *
+ * This is the assertion the class list exists for. Something reconciling would
+ * read a class it cannot walk as a class with nothing in it, and would then be
+ * confidently silent about every object in it -- the same shape as every other
+ * check in this tree that could not fail: an absence and an emptiness that
+ * look identical.
+ */
+DP_START_TEST(fal_cap, dpa_object_names_what_it_cannot_walk)
+{
+	json_object *expected;
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"dpa_objects\": {"
+		"        \"classes\": ["
+		"            { \"class\": \"route\",  \"enumerable\": true },"
+		"            { \"class\": \"route6\", \"enumerable\": true },"
+		"            { \"class\": \"qos-if\", \"enumerable\": false,"
+		"              \"reason\": \"no walker\" }"
+		"        ]"
+		"    }"
+		"}");
+	dp_test_check_json_state("dpa object show", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+} DP_END_TEST;

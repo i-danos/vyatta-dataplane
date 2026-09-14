@@ -75,6 +75,7 @@ core_sources = files(
         'ecmp.c',
         'ether.c',
         'event.c',
+        'dpa_object.c',
         'fal.c',
         'fal_capability.c',
         'feature_plugin.c',

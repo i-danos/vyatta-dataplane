@@ -140,7 +140,15 @@ static int pd_show_dataplane(FILE *f, const char *name,
 	return 0;
 }
 
-static enum pd_obj_state pd_obj_state_parse(const char *name)
+const char *pd_obj_state_name(enum pd_obj_state state)
+{
+	if (state >= PD_OBJ_STATE_LAST)
+		return "unknown";
+
+	return pd_obj_state_names[state];
+}
+
+enum pd_obj_state pd_obj_state_from_name(const char *name)
 {
 	int i;
 
@@ -149,6 +157,11 @@ static enum pd_obj_state pd_obj_state_parse(const char *name)
 			return i;
 
 	return PD_OBJ_STATE_LAST;
+}
+
+static enum pd_obj_state pd_obj_state_parse(const char *name)
+{
+	return pd_obj_state_from_name(name);
 }
 
 /*
