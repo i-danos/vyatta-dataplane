@@ -263,7 +263,7 @@ DP_START_TEST(fal_cap, dpa_object_uniform_shape)
 		"    \"dpa_objects\": {"
 		"        \"objects\": ["
 		"            { \"class\": \"route\","
-		"              \"key\": \"vrf:default/table:254/10.74.0.0/24\","
+		"              \"key\": \"vrf:default/table:254/10.74.0.0/24/scope:0\","
 		"              \"state\": \"full\","
 		"              \"backend\": \"fal-test\" }"
 		"        ]"
@@ -410,11 +410,11 @@ DP_START_TEST(fal_cap, dpa_object_marks_dataplane_owned)
 		"{"
 		"    \"dpa_objects\": {"
 		"        \"objects\": ["
-		"            { \"key\": \"vrf:default/table:254/127.0.0.0/8\","
+		"            { \"key\": \"vrf:default/table:254/127.0.0.0/8/scope:254\","
 		"              \"dataplane_owned\": true },"
-		"            { \"key\": \"vrf:default/table:254/255.255.255.255/32\","
+		"            { \"key\": \"vrf:default/table:254/255.255.255.255/32/scope:254\","
 		"              \"dataplane_owned\": true },"
-		"            { \"key\": \"vrf:default/table:254/10.76.0.0/24\","
+		"            { \"key\": \"vrf:default/table:254/10.76.0.0/24/scope:0\","
 		"              \"dataplane_owned\": false }"
 		"        ]"
 		"    }"
@@ -424,6 +424,46 @@ DP_START_TEST(fal_cap, dpa_object_marks_dataplane_owned)
 	json_object_put(expected);
 
 	dp_test_netlink_del_route("10.76.0.0/24 nh 1.1.1.2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+
+} DP_END_TEST;
+
+/*
+ * One prefix, two objects, both visible.
+ *
+ * The reserved reject default sits at LPM_SCOPE_PAN_DIMENSIONAL and a real
+ * default route sits at an ordinary scope. The LPM keys on (prefix, depth,
+ * scope) and the object key did not carry the third, so these two collapsed
+ * onto one key: eight objects arrived at a comparison as six, and the
+ * arithmetic that followed looked entirely normal.
+ *
+ * Asserting both is the point. Asserting only the real one would pass equally
+ * well against a view that had lost the reserved one, which is the state this
+ * exists to prevent.
+ */
+DP_START_TEST(fal_cap, two_defaults_are_two_objects)
+{
+	json_object *expected;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+	dp_test_netlink_add_route("0.0.0.0/0 nh 1.1.1.2 int:dp1T0");
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"dpa_objects\": {"
+		"        \"objects\": ["
+		"            { \"key\": \"vrf:default/table:254/0.0.0.0/0/scope:-1\","
+		"              \"dataplane_owned\": true },"
+		"            { \"key\": \"vrf:default/table:254/0.0.0.0/0/scope:0\","
+		"              \"dataplane_owned\": false }"
+		"        ]"
+		"    }"
+		"}");
+	dp_test_check_json_state("dpa object show route", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+	dp_test_netlink_del_route("0.0.0.0/0 nh 1.1.1.2 int:dp1T0");
 	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
 
 } DP_END_TEST;
