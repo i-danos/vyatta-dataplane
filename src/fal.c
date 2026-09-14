@@ -189,6 +189,13 @@ bool fal_backend_implements(unsigned int idx, enum fal_op_group group)
 	case FAL_OP_GROUP_TUN:	return h->tun != NULL;
 	case FAL_OP_GROUP_VLAN:	return h->bridge != NULL || h->vlan != NULL;
 	case FAL_OP_GROUP_VRF:	return h->vrf != NULL;
+	/*
+	 * No capability names these, so there is nothing for them to be
+	 * inconsistent with.
+	 */
+	case FAL_OP_GROUP_ANY:
+	case FAL_OP_GROUP_LAST:
+		return false;
 	}
 
 	return false;
@@ -948,50 +955,74 @@ bool fal_plugins_present(void)
 }
 
 /*
- * Which capability each op group needs, so that dispatch can pick a backend
- * that declares it.
+ * Which op group each set of ops belongs to, so that dispatch can pick a
+ * backend that declares the matching capability.
  *
- * The groups with no entry -- ports, router interfaces, LAG, STP, mirroring,
- * BFD, the switch itself -- get FAL_CAP_LAST, which selects the first loaded
- * backend. That is exactly what a single backend does today, so nothing about
- * those paths changes; what it is not is a decision. Whether creating a port
- * should reach *every* backend that might later hold objects on it is a real
- * question and this does not answer it, deliberately, rather than answering it
- * by accident in a macro.
+ * The group-to-capability step lives in fal_backend_for_group(), in one place,
+ * because the per-object record of which backend holds an object asks the same
+ * question through the same function. Two mappings would be two chances to
+ * disagree, and a record naming a backend the object never reached is worse
+ * than no record.
  *
- * ip covers v4 and v6 through the same ops, so it can only name one of them
- * here. Choosing a backend per *object* -- this v6 route to a backend that
+ * bridge, vlan and vlan_feat share FAL_OP_GROUP_VLAN: they are one capability
+ * from a backend's point of view, and splitting them would invite a backend to
+ * declare half of it.
+ *
+ * ip covers v4 and v6 through the same ops, so the group can only carry one of
+ * them. Choosing a backend per *object* -- this v6 route to a backend that
  * declares IPv6, that v4 route to another -- needs the capability at the call
  * site rather than at the op group, which is 187 call sites and a separate
- * change.
+ * change. Until then a v6 route records the backend the ip group selected,
+ * which is the truth about where it went even though the name of the
+ * capability that chose it is FAL_CAP_IPV4.
  */
-#define FAL_OPCAP_ip		FAL_CAP_IPV4
-#define FAL_OPCAP_ipmc		FAL_CAP_MULTICAST
-#define FAL_OPCAP_acl		FAL_CAP_ACL
-#define FAL_OPCAP_qos		FAL_CAP_QOS
-#define FAL_OPCAP_mpls		FAL_CAP_MPLS
-#define FAL_OPCAP_tun		FAL_CAP_VXLAN
-#define FAL_OPCAP_bridge	FAL_CAP_VLAN
-#define FAL_OPCAP_vlan		FAL_CAP_VLAN
-#define FAL_OPCAP_vlan_feat	FAL_CAP_VLAN
-#define FAL_OPCAP_vrf		FAL_CAP_VRF
-#define FAL_OPCAP_l2		FAL_CAP_LAST
-#define FAL_OPCAP_rif		FAL_CAP_LAST
-#define FAL_OPCAP_lag		FAL_CAP_LAST
-#define FAL_OPCAP_lacp		FAL_CAP_LAST
-#define FAL_OPCAP_stp		FAL_CAP_LAST
-#define FAL_OPCAP_sys		FAL_CAP_LAST
-#define FAL_OPCAP_sw		FAL_CAP_LAST
-#define FAL_OPCAP_mirror	FAL_CAP_LAST
-#define FAL_OPCAP_backplane	FAL_CAP_LAST
-#define FAL_OPCAP_cpp_rl	FAL_CAP_LAST
-#define FAL_OPCAP_capture	FAL_CAP_LAST
-#define FAL_OPCAP_bfd		FAL_CAP_LAST
-#define FAL_OPCAP_policer	FAL_CAP_LAST
-#define FAL_OPCAP_ptp		FAL_CAP_LAST
+#define FAL_OPGRP_ip		FAL_OP_GROUP_IP
+#define FAL_OPGRP_ipmc		FAL_OP_GROUP_IPMC
+#define FAL_OPGRP_acl		FAL_OP_GROUP_ACL
+#define FAL_OPGRP_qos		FAL_OP_GROUP_QOS
+#define FAL_OPGRP_mpls		FAL_OP_GROUP_MPLS
+#define FAL_OPGRP_tun		FAL_OP_GROUP_TUN
+#define FAL_OPGRP_bridge	FAL_OP_GROUP_VLAN
+#define FAL_OPGRP_vlan		FAL_OP_GROUP_VLAN
+#define FAL_OPGRP_vlan_feat	FAL_OP_GROUP_VLAN
+#define FAL_OPGRP_vrf		FAL_OP_GROUP_VRF
+#define FAL_OPGRP_l2		FAL_OP_GROUP_ANY
+#define FAL_OPGRP_rif		FAL_OP_GROUP_ANY
+#define FAL_OPGRP_lag		FAL_OP_GROUP_ANY
+#define FAL_OPGRP_lacp		FAL_OP_GROUP_ANY
+#define FAL_OPGRP_stp		FAL_OP_GROUP_ANY
+#define FAL_OPGRP_sys		FAL_OP_GROUP_ANY
+#define FAL_OPGRP_sw		FAL_OP_GROUP_ANY
+#define FAL_OPGRP_mirror	FAL_OP_GROUP_ANY
+#define FAL_OPGRP_backplane	FAL_OP_GROUP_ANY
+#define FAL_OPGRP_cpp_rl	FAL_OP_GROUP_ANY
+#define FAL_OPGRP_capture	FAL_OP_GROUP_ANY
+#define FAL_OPGRP_bfd		FAL_OP_GROUP_ANY
+#define FAL_OPGRP_policer	FAL_OP_GROUP_ANY
+#define FAL_OPGRP_ptp		FAL_OP_GROUP_ANY
+
+unsigned int fal_backend_for_group(enum fal_op_group group)
+{
+	static const enum fal_cap group_cap[FAL_OP_GROUP_LAST] = {
+		[FAL_OP_GROUP_IP]   = FAL_CAP_IPV4,
+		[FAL_OP_GROUP_IPMC] = FAL_CAP_MULTICAST,
+		[FAL_OP_GROUP_ACL]  = FAL_CAP_ACL,
+		[FAL_OP_GROUP_QOS]  = FAL_CAP_QOS,
+		[FAL_OP_GROUP_MPLS] = FAL_CAP_MPLS,
+		[FAL_OP_GROUP_TUN]  = FAL_CAP_VXLAN,
+		[FAL_OP_GROUP_VLAN] = FAL_CAP_VLAN,
+		[FAL_OP_GROUP_VRF]  = FAL_CAP_VRF,
+		[FAL_OP_GROUP_ANY]  = FAL_CAP_LAST,
+	};
+
+	if (group >= FAL_OP_GROUP_LAST)
+		return FAL_BACKEND_NONE;
+
+	return fal_backend_select(group_cap[group]);
+}
 
 #define fal_op_handler(op_type)						\
-	fal_backend_handler(fal_backend_select(FAL_OPCAP_ ## op_type))
+	fal_backend_handler(fal_backend_for_group(FAL_OPGRP_ ## op_type))
 
 #define call_handler(op_type, fn, args...)				\
 	{								\

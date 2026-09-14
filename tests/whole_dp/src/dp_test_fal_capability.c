@@ -24,6 +24,8 @@
 #include "dp_test.h"
 #include "dp_test_lib_internal.h"
 #include "dp_test_json_utils.h"
+#include "dp_test_netlink_state_internal.h"
+#include "dp_test_lib_intf_internal.h"
 
 DP_DECL_TEST_SUITE(fal_capability_suite);
 
@@ -200,5 +202,41 @@ DP_START_TEST(fal_cap, pd_show_names_the_backend)
 	dp_test_check_json_state("pd show dataplane route", expected,
 				 DP_TEST_JSON_CHECK_SUBSET, false);
 	json_object_put(expected);
+
+} DP_END_TEST;
+
+/*
+ * A route records which backend holds it, and says so from outside.
+ *
+ * The test plugin declares ipv4 true and implements ip entry points, so
+ * dispatch sends routes to it and the record should name it. This is the half
+ * of the report a reconciliation loop needs and a backend preference is
+ * expressed in: "programmed" and "programmed *where*" are different facts, and
+ * until now the report could only carry the first.
+ *
+ * Asserted through "pd show dataplane route full" rather than by reading the
+ * struct, because a field nothing outside the data plane can read cannot be
+ * tested from outside it either.
+ */
+DP_START_TEST(fal_cap, route_records_its_backend)
+{
+	json_object *expected;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+	dp_test_netlink_add_route("10.73.0.0/24 nh 1.1.1.2 int:dp1T0");
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"objects\": ["
+		"        { \"prefix\": \"10.73.0.0/24\","
+		"          \"backend\": \"fal-test\" }"
+		"    ]"
+		"}");
+	dp_test_check_json_state("pd show dataplane route full", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+	dp_test_netlink_del_route("10.73.0.0/24 nh 1.1.1.2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
 
 } DP_END_TEST;
