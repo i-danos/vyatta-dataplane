@@ -410,6 +410,10 @@ void vrf_set_name(struct vrf *vrf, const char *ifname)
 
 	strncpy(vrf->v_name, ifname+3, sizeof(vrf->v_name));
 	vrf->v_name[sizeof(vrf->v_name)-1] = '\0';
+
+	/* The undecorated device name, which the kernel and zebra both use. */
+	strncpy(vrf->v_ifname, ifname, sizeof(vrf->v_ifname));
+	vrf->v_ifname[sizeof(vrf->v_ifname)-1] = '\0';
 }
 
 struct ifnet *vrf_if_create(const char *ifname, uint32_t if_index,

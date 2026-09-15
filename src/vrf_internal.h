@@ -66,6 +66,19 @@ struct vrf {
 
 	struct rcu_head rcu;
 	char v_name[VRF_NAME_SIZE];
+	/*
+	 * The VRF interface's own name -- "vrfRED" where v_name is "RED".
+	 *
+	 * Both exist because they answer to different readers. DANOS's CLI
+	 * calls the routing instance RED and an operator expects that word;
+	 * the kernel and zebra both call the device vrfRED, and an identity
+	 * that a Desired side has to produce must be the one they use. The
+	 * object key carries this, the display carries the other.
+	 *
+	 * Without it the two sides disagreed on every route in every
+	 * non-default VRF: "vrf:vrfRED" against "vrf:RED", measured.
+	 */
+	char v_ifname[VRF_NAME_SIZE + 4];
 	uint32_t v_external_id;
 	fal_object_t v_fal_obj;
 	struct pd_obj_state_and_flags v_pd_state;
@@ -132,10 +145,10 @@ static inline const char *vrf_get_external_name(vrfid_t vrf_id)
 	vrf = vrf_get_rcu(vrf_id);
 	if (!vrf)
 		return "unknown";
-	if (vrf->v_name[0] == '\0')
+	if (vrf->v_ifname[0] == '\0')
 		return "default";
 
-	return vrf->v_name;
+	return vrf->v_ifname;
 }
 
 static inline vrfid_t vrf_get_next(vrfid_t vrf_id, struct vrf **vrf)
