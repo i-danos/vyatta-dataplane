@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.39) unstable; urgency=medium
+
+  * vrf: keep the interface name, because that is what zebra and the kernel say
+
+ -- DANOS Open <miwide20190328@gmail.com>  Tue, 15 Sep 2026 17:07:28 +0800
+
 vyatta-dataplane (3.14.38) unstable; urgency=medium
 
   * npf_rte_acl: stop the optimiser thread where its lifetime actually ends
