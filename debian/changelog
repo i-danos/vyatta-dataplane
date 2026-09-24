@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.40) unstable; urgency=medium
+
+  * dpa: make next-hop groups enumerable, keyed by slot index so a route can be joined to its group
+
+ -- DANOS Open <miwide20190328@gmail.com>  Fri, 25 Sep 2026 10:00:00 +0800
+
 vyatta-dataplane (3.14.39) unstable; urgency=medium
 
   * vrf: keep the interface name, because that is what zebra and the kernel say

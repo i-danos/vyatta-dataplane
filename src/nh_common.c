@@ -12,6 +12,7 @@
 #include "if_llatbl.h"
 #include "ip_route.h"
 #include "lcore_sched.h"
+#include "dpa_object.h"
 #include "nh_common.h"
 #include "urcu.h"
 #include "vplane_debug.h"
@@ -1959,4 +1960,44 @@ next_hop_list_get_fal_nhs(int family, uint32_t nhl_idx,
 
 	*hops = nextl->siblings;
 	return nextl->nsiblings;
+}
+
+/*
+ * Emit the next-hop groups of one address family as DPA objects.
+ *
+ * Keyed by the group's slot index, which is what routes refer to, so a reader
+ * can join a route to the group it points at. The backend is derived with
+ * pd_backend_for() like every other class: a next-hop list carries only the
+ * state, not a backend field.
+ */
+static void nexthop_emit_dpa_objects(json_writer_t *json, int family,
+				     const char *fam_name,
+				     enum pd_obj_state subset)
+{
+	struct cds_lfht *hash_tbl = nh_common_get_hash_table(family);
+	struct cds_lfht_iter iter;
+	struct next_hop_list *nhl;
+
+	if (!hash_tbl)
+		return;
+
+	cds_lfht_for_each_entry(hash_tbl, &iter, nhl, nh_node) {
+		char key[48];
+
+		if (subset != PD_OBJ_STATE_LAST && nhl->pd_state != subset)
+			continue;
+		snprintf(key, sizeof(key), "%s/idx:%u", fam_name, nhl->index);
+		dpa_object_emit_raw(json, "nexthop-group", key, nhl->pd_state,
+				    pd_backend_for(nhl->pd_state,
+						   FAL_OP_GROUP_IP));
+	}
+}
+
+int nexthop_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
+{
+	rcu_read_lock();
+	nexthop_emit_dpa_objects(json, AF_INET, "inet", subset);
+	nexthop_emit_dpa_objects(json, AF_INET6, "inet6", subset);
+	rcu_read_unlock();
+	return 0;
 }
