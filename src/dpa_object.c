@@ -17,7 +17,7 @@
 /*
  * The classes, and whether each can be walked.
  *
- * Seven of the nine can be walked. The two QoS classes cannot -- they have no
+ * Eight of the ten can be walked. The two QoS classes cannot -- they have no
  * walker at all -- and saying so, with the reason, is the point of this table:
  * something reconciling would read a class it cannot walk as a class with
  * nothing in it, then be confidently silent about every object in it. A reader
@@ -37,6 +37,7 @@ static const struct dpa_obj_class dpa_classes[] = {
 	{ "mpls-route", mpls_label_table_get_dpa_objects, NULL },
 	{ "vrf",        vrf_get_dpa_objects,     NULL },
 	{ "nexthop-group", nexthop_get_dpa_objects, NULL },
+	{ "interface",  if_get_dpa_objects,      NULL },
 	{ "qos-if",     NULL, "no walker" },
 	{ "qos-vlan",   NULL, "no walker" },
 	{ NULL, NULL, NULL },

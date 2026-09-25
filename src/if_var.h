@@ -361,7 +361,7 @@ struct ifnet {
 			   if_created : 1,    /* All i/f build actions done */
 			   if_l3_enabled : 1, /* enabled for L3 use */
 			   hw_capturing : 1,  /* Hardware capture enabled */
-			   spare2: 1,
+			   fal_l3_pd_set : 1, /* fal_l3_pd holds a result */
 			   spare3: 1;
 	uint8_t		   pad[1];
 
@@ -384,6 +384,14 @@ struct ifnet {
 	struct rte_ether_addr if_dot1x_station;
 
 	fal_object_t       fal_l3;
+	/*
+	 * What creating the router interface returned, and where it went. Kept
+	 * apart from fal_l3 because a zero handle cannot say why there is no
+	 * object: no backend, no support, or an error look the same there.
+	 * Meaningful only while fal_l3_pd_set is true; the zero value of the
+	 * state is PD_OBJ_STATE_FULL, so "never attempted" needs its own bit.
+	 */
+	struct pd_obj_state_and_flags fal_l3_pd;
 
 	/* Software statistics */
 	struct if_perf	   if_txpps;	/* packets rate */
