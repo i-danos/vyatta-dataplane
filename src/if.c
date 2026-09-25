@@ -75,6 +75,7 @@
 #include "crypto/vti.h"
 #include "dp_event.h"
 #include "ether.h"
+#include "dpa_object.h"
 #include "fal.h"
 #include "if/bridge/bridge.h"
 #include "if/dpdk-eth/dpdk_eth_if.h"
@@ -3300,6 +3301,8 @@ if_fal_create_l3_intf(struct ifnet *ifp)
 
 	ret = fal_create_router_interface(l3_nattrs, l3_attrs,
 					  &fal_l3);
+	pd_state_set(&ifp->fal_l3_pd, ret, FAL_OP_GROUP_ANY);
+	ifp->fal_l3_pd_set = true;
 	if ((ret == 0) && !fal_l3) {
 		RTE_LOG(ERR, DATAPLANE,
 			"Invalid L3 object ID returned for %s\n",
@@ -3323,6 +3326,8 @@ if_fal_delete_l3_intf(struct ifnet *ifp)
 {
 	int ret = 0;
 
+	/* The object is going away, or never existed: stop reporting it. */
+	ifp->fal_l3_pd_set = false;
 	if (!ifp->fal_l3)
 		return 0;
 
@@ -4090,5 +4095,40 @@ int dp_ifnet_get_mac_addr(struct ifnet *ifp, struct rte_ether_addr *eth_addr)
 		return -1;
 
 	rte_ether_addr_copy(&ifp->eth_addr, eth_addr);
+	return 0;
+}
+
+/*
+ * DPA objects for the class "interface": the router interface each L3-capable
+ * interface asked the backend for. Interfaces that never asked (no L3 state
+ * built yet, or already torn down) are not listed, as opposed to listed with a
+ * made-up state. Keyed by name, which is what zebra and the kernel say.
+ */
+struct if_dpa_walk {
+	json_writer_t *json;
+	enum pd_obj_state subset;
+};
+
+static void if_dpa_emit(struct ifnet *ifp, void *arg)
+{
+	struct if_dpa_walk *w = arg;
+	char key[IFNAMSIZ + 4];
+
+	if (!ifp->fal_l3_pd_set)
+		return;
+	if (w->subset != PD_OBJ_STATE_LAST &&
+	    ifp->fal_l3_pd.state != w->subset)
+		return;
+	snprintf(key, sizeof(key), "if:%s", ifp->if_name);
+	dpa_object_emit(w->json, "interface", key, &ifp->fal_l3_pd);
+}
+
+int if_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
+{
+	struct if_dpa_walk w = { .json = json, .subset = subset };
+
+	rcu_read_lock();
+	dp_ifnet_walk(if_dpa_emit, &w);
+	rcu_read_unlock();
 	return 0;
 }

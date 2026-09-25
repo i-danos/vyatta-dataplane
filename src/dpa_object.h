@@ -103,5 +103,6 @@ int mpls_label_table_get_dpa_objects(json_writer_t *json,
 int mroute_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset);
 int mroute6_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset);
 int nexthop_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset);
+int if_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset);
 
 #endif /* DPA_OBJECT_H */
