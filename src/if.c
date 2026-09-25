@@ -4099,10 +4099,17 @@ int dp_ifnet_get_mac_addr(struct ifnet *ifp, struct rte_ether_addr *eth_addr)
 }
 
 /*
- * DPA objects for the class "interface": the router interface each L3-capable
- * interface asked the backend for. Interfaces that never asked (no L3 state
- * built yet, or already torn down) are not listed, as opposed to listed with a
- * made-up state. Keyed by name, which is what zebra and the kernel say.
+ * DPA objects for the class "interface": the router interface each L3
+ * interface asked the backend to create, keyed by name -- which is what zebra
+ * and the kernel say.
+ *
+ * An L3 interface that never asked because it is not switched in hardware
+ * (hw_forwarding is off, which is every routed port on a software data plane)
+ * is listed as not_needed rather than left out. Left out, it cannot be told
+ * from an interface that does not exist -- the same absent-versus-not-carried
+ * confusion the class list exists to prevent. Interfaces with no L3 state, or
+ * no L3 router-interface support in their type, are not listed at all: there
+ * is nothing they could have asked for.
  */
 struct if_dpa_walk {
 	json_writer_t *json;
@@ -4113,14 +4120,29 @@ static void if_dpa_emit(struct ifnet *ifp, void *arg)
 {
 	struct if_dpa_walk *w = arg;
 	char key[IFNAMSIZ + 4];
+	const struct ift_ops *ops;
 
-	if (!ifp->fal_l3_pd_set)
+	if (ifp->fal_l3_pd_set) {
+		if (w->subset != PD_OBJ_STATE_LAST &&
+		    ifp->fal_l3_pd.state != w->subset)
+			return;
+		snprintf(key, sizeof(key), "if:%s", ifp->if_name);
+		dpa_object_emit(w->json, "interface", key, &ifp->fal_l3_pd);
+		return;
+	}
+
+	/* Never asked. Only say "not needed" if hw switching is the reason. */
+	ops = if_get_ops(ifp);
+	if (!ifp->if_created || !ifp->if_l3_enabled || !ops ||
+	    !ops->ifop_l3_enable ||
+	    !if_check_any_emb_feat(ifp, IF_EMB_FEAT_HW_SWITCHING_DISABLED))
 		return;
 	if (w->subset != PD_OBJ_STATE_LAST &&
-	    ifp->fal_l3_pd.state != w->subset)
+	    w->subset != PD_OBJ_STATE_NOT_NEEDED)
 		return;
 	snprintf(key, sizeof(key), "if:%s", ifp->if_name);
-	dpa_object_emit(w->json, "interface", key, &ifp->fal_l3_pd);
+	dpa_object_emit_raw(w->json, "interface", key,
+			    PD_OBJ_STATE_NOT_NEEDED, PD_BACKEND_NONE);
 }
 
 int if_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
