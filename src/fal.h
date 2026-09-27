@@ -679,6 +679,15 @@ void fal_register_message_handler(struct message_handler *handler);
  */
 enum fal_op_group {
 	FAL_OP_GROUP_IP,
+	/*
+	 * v4 and v6 routes share one handler struct (fal_ip_ops) and one
+	 * op_type token ("ip") for dispatch macro purposes -- there is no
+	 * fal_ip6_ops to select instead. This group exists only so the
+	 * *capability* checked for backend selection can be IPV6 rather than
+	 * IPV4 when the object actually is v6; it never appears as a
+	 * call_handler() op_type.
+	 */
+	FAL_OP_GROUP_IPV6,
 	FAL_OP_GROUP_IPMC,
 	FAL_OP_GROUP_ACL,
 	FAL_OP_GROUP_QOS,

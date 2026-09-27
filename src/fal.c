@@ -181,7 +181,14 @@ bool fal_backend_implements(unsigned int idx, enum fal_op_group group)
 		return false;
 
 	switch (group) {
-	case FAL_OP_GROUP_IP:	return h->ip != NULL;
+	case FAL_OP_GROUP_IP:
+	/*
+	 * Same handler struct field as FAL_OP_GROUP_IP -- there is no
+	 * separate h->ip6. This group only changes which capability
+	 * fal_backend_for_group() checks, not which field a backend
+	 * implements the object through.
+	 */
+	case FAL_OP_GROUP_IPV6:	return h->ip != NULL;
 	case FAL_OP_GROUP_IPMC:	return h->ipmc != NULL;
 	case FAL_OP_GROUP_ACL:	return h->acl != NULL;
 	case FAL_OP_GROUP_QOS:	return h->qos != NULL;
@@ -1005,6 +1012,7 @@ unsigned int fal_backend_for_group(enum fal_op_group group)
 {
 	static const enum fal_cap group_cap[FAL_OP_GROUP_LAST] = {
 		[FAL_OP_GROUP_IP]   = FAL_CAP_IPV4,
+		[FAL_OP_GROUP_IPV6] = FAL_CAP_IPV6,
 		[FAL_OP_GROUP_IPMC] = FAL_CAP_MULTICAST,
 		[FAL_OP_GROUP_ACL]  = FAL_CAP_ACL,
 		[FAL_OP_GROUP_QOS]  = FAL_CAP_QOS,
@@ -1023,10 +1031,24 @@ unsigned int fal_backend_for_group(enum fal_op_group group)
 
 #define fal_op_handler(op_type)						\
 	fal_backend_handler(fal_backend_for_group(FAL_OPGRP_ ## op_type))
+#define fal_op_handler_grp(group)					\
+	fal_backend_handler(fal_backend_for_group(group))
 
-#define call_handler(op_type, fn, args...)				\
+/*
+ * The group-parameterized forms underneath call_handler() etc. exist because
+ * op_type is doing two jobs at once everywhere else: it names which member of
+ * the backend's handler struct to call (h->ip, a real ABI field -- there is
+ * no separate h->ip6), and it names which capability decided that backend.
+ * Those two are the same fact for every op_type except one: v4 and v6 routes
+ * share fal_ip_ops (op_type stays "ip") but must check different capabilities
+ * (IPV4 vs IPV6), or a backend that offloads only v4 gets asked for v6 routes
+ * too and a backend that offloads only v6 never gets asked at all. These let
+ * the *group* be given explicitly while op_type still picks the struct field.
+ */
+#define call_handler_grp(op_type, group, fn, args...)			\
 	{								\
-		struct message_handler *h = fal_op_handler(op_type);	\
+		struct message_handler *h =				\
+			fal_backend_handler(fal_backend_for_group(group)); \
 		struct fal_ ## op_type ## _ops *interface = NULL;	\
 		if (h) {						\
 			interface = h->op_type;				\
@@ -1035,9 +1057,10 @@ unsigned int fal_backend_for_group(enum fal_op_group group)
 		}							\
 	}
 
-#define call_handler_def_ret(op_type, def_ret, fn, args...)		\
+#define call_handler_grp_def_ret(op_type, group, def_ret, fn, args...) \
 	({								\
-		struct message_handler *h = fal_op_handler(op_type);	\
+		struct message_handler *h =				\
+			fal_backend_handler(fal_backend_for_group(group)); \
 		struct fal_ ## op_type ## _ops *interface = NULL;	\
 		int ret = def_ret;					\
 		if (h) {						\
@@ -1047,6 +1070,12 @@ unsigned int fal_backend_for_group(enum fal_op_group group)
 		}							\
 		ret;							\
 	})
+
+#define call_handler(op_type, fn, args...)				\
+	call_handler_grp(op_type, FAL_OPGRP_ ## op_type, fn, args)
+
+#define call_handler_def_ret(op_type, def_ret, fn, args...)		\
+	call_handler_grp_def_ret(op_type, FAL_OPGRP_ ## op_type, def_ret, fn, args)
 
 /* return value defaults to 0 */
 #define call_handler_ret(op_type, fn, args...)				\
@@ -2288,7 +2317,8 @@ static int fal_ip_new_route(unsigned int vrf_id,
 			    uint8_t prefixlen,
 			    uint32_t tableid,
 			    uint32_t attr_count,
-			    const struct fal_attribute_t *attr_list)
+			    const struct fal_attribute_t *attr_list,
+			    enum fal_op_group group)
 {
 	struct fal_route_entry_t route = {
 		.vrf_obj = vrf_obj,
@@ -2305,17 +2335,17 @@ static int fal_ip_new_route(unsigned int vrf_id,
 	 * If using route handler that takes a VRF object but no VRF
 	 * object created then return an error.
 	 */
-	struct message_handler *iph = fal_op_handler(ip);
+	struct message_handler *iph = fal_op_handler_grp(group);
 
 	if (vrf_obj == FAL_NULL_OBJECT_ID &&
 	    iph && iph->ip && iph->ip->new_route)
 		return -EINVAL;
 
-	ret = call_handler_def_ret(
-		ip, -EOPNOTSUPP, new_route, &route, attr_count, attr_list);
+	ret = call_handler_grp_def_ret(
+		ip, group, -EOPNOTSUPP, new_route, &route, attr_count, attr_list);
 	if (ret == -EOPNOTSUPP)
-		ret = call_handler_def_ret(
-			ip, -EOPNOTSUPP, new_route_depr, vrf_id, ipaddr,
+		ret = call_handler_grp_def_ret(
+			ip, group, -EOPNOTSUPP, new_route_depr, vrf_id, ipaddr,
 			prefixlen, tableid, attr_count, attr_list);
 
 	return ret;
@@ -2326,7 +2356,8 @@ static int fal_ip_upd_route(unsigned int vrf_id,
 			    struct fal_ip_address_t *ipaddr,
 			    uint8_t prefixlen,
 			    uint32_t tableid,
-			    struct fal_attribute_t *attr)
+			    struct fal_attribute_t *attr,
+			    enum fal_op_group group)
 {
 	struct fal_route_entry_t route = {
 		.vrf_obj = vrf_obj,
@@ -2339,11 +2370,11 @@ static int fal_ip_upd_route(unsigned int vrf_id,
 	if (tableid != RT_TABLE_MAIN)
 		return -EOPNOTSUPP;
 
-	ret = call_handler_def_ret(
-		ip, -EOPNOTSUPP, upd_route, &route, attr);
+	ret = call_handler_grp_def_ret(
+		ip, group, -EOPNOTSUPP, upd_route, &route, attr);
 	if (ret == -EOPNOTSUPP)
-		ret = call_handler_def_ret(
-			ip, -EOPNOTSUPP, upd_route_depr, vrf_id,
+		ret = call_handler_grp_def_ret(
+			ip, group, -EOPNOTSUPP, upd_route_depr, vrf_id,
 			ipaddr, prefixlen, tableid, attr);
 
 	return ret;
@@ -2353,7 +2384,8 @@ static int fal_ip_del_route(unsigned int vrf_id,
 			    fal_object_t vrf_obj,
 			    struct fal_ip_address_t *ipaddr,
 			    uint8_t prefixlen,
-			    uint32_t tableid)
+			    uint32_t tableid,
+			    enum fal_op_group group)
 {
 	struct fal_route_entry_t route = {
 		.vrf_obj = vrf_obj,
@@ -2366,11 +2398,11 @@ static int fal_ip_del_route(unsigned int vrf_id,
 	if (tableid != RT_TABLE_MAIN)
 		return -EOPNOTSUPP;
 
-	ret = call_handler_def_ret(
-		ip, -EOPNOTSUPP, del_route, &route);
+	ret = call_handler_grp_def_ret(
+		ip, group, -EOPNOTSUPP, del_route, &route);
 	if (ret == -EOPNOTSUPP)
-		ret = call_handler_def_ret(
-			ip, -EOPNOTSUPP, del_route_depr, vrf_id, ipaddr,
+		ret = call_handler_grp_def_ret(
+			ip, group, -EOPNOTSUPP, del_route_depr, vrf_id, ipaddr,
 			prefixlen, tableid);
 
 	return ret;
@@ -2382,7 +2414,8 @@ static int fal_ip_get_route_attrs(unsigned int vrf_id,
 				  uint8_t prefixlen,
 				  uint32_t tableid,
 				  uint32_t attr_count,
-				  const struct fal_attribute_t *attr_list)
+				  const struct fal_attribute_t *attr_list,
+				  enum fal_op_group group)
 {
 	struct fal_route_entry_t route = {
 		.vrf_obj = vrf_obj,
@@ -2399,18 +2432,18 @@ static int fal_ip_get_route_attrs(unsigned int vrf_id,
 	 * If using route handler that takes a VRF object but no VRF
 	 * object created then return an error.
 	 */
-	struct message_handler *iph = fal_op_handler(ip);
+	struct message_handler *iph = fal_op_handler_grp(group);
 
 	if (vrf_obj == FAL_NULL_OBJECT_ID &&
 	    iph && iph->ip && iph->ip->get_route_attrs)
 		return -EINVAL;
 
-	ret = call_handler_def_ret(
-		ip, -EOPNOTSUPP, get_route_attrs, &route, attr_count,
+	ret = call_handler_grp_def_ret(
+		ip, group, -EOPNOTSUPP, get_route_attrs, &route, attr_count,
 		attr_list);
 	if (ret == -EOPNOTSUPP)
-		ret = call_handler_def_ret(
-			ip, -EOPNOTSUPP, get_route_attrs_depr, vrf_id,
+		ret = call_handler_grp_def_ret(
+			ip, group, -EOPNOTSUPP, get_route_attrs_depr, vrf_id,
 			ipaddr, prefixlen, tableid, attr_count,
 			attr_list);
 
@@ -2448,7 +2481,7 @@ int fal_ip4_new_route(vrfid_t vrf_id, fal_object_t vrf_obj,
 		return 0;
 
 	return fal_ip_new_route(__vrf_id, vrf_obj, &faddr, prefixlen, tableid,
-				RTE_DIM(attr_list), attr_list);
+				RTE_DIM(attr_list), attr_list, FAL_OP_GROUP_IP);
 }
 
 int fal_ip6_new_route(vrfid_t vrf_id, fal_object_t vrf_obj,
@@ -2474,7 +2507,7 @@ int fal_ip6_new_route(vrfid_t vrf_id, fal_object_t vrf_obj,
 		return 0;
 
 	return fal_ip_new_route(__vrf_id, vrf_obj, &faddr, prefixlen, tableid,
-				RTE_DIM(attr_list), attr_list);
+				RTE_DIM(attr_list), attr_list, FAL_OP_GROUP_IPV6);
 }
 
 int fal_ip4_upd_route(vrfid_t vrf_id, fal_object_t vrf_obj,
@@ -2512,7 +2545,7 @@ int fal_ip4_upd_route(vrfid_t vrf_id, fal_object_t vrf_obj,
 	}
 
 	ret = fal_ip_upd_route(__vrf_id, vrf_obj, &faddr, prefixlen,
-			       tableid, &pa_attr);
+			       tableid, &pa_attr, FAL_OP_GROUP_IP);
 
 	if (!ret && action == FAL_PACKET_ACTION_FORWARD) {
 		struct fal_attribute_t fnhg_attr = {
@@ -2520,7 +2553,7 @@ int fal_ip4_upd_route(vrfid_t vrf_id, fal_object_t vrf_obj,
 				.value.objid = nhg_object };
 
 		ret = fal_ip_upd_route(__vrf_id, vrf_obj, &faddr, prefixlen,
-				       tableid, &fnhg_attr);
+				       tableid, &fnhg_attr, FAL_OP_GROUP_IP);
 	}
 
 	return ret;
@@ -2561,7 +2594,7 @@ int fal_ip6_upd_route(vrfid_t vrf_id, fal_object_t vrf_obj,
 	}
 
 	ret = fal_ip_upd_route(__vrf_id, vrf_obj, &faddr, prefixlen,
-			       tableid, &pa_attr);
+			       tableid, &pa_attr, FAL_OP_GROUP_IPV6);
 
 	if (!ret && action == FAL_PACKET_ACTION_FORWARD) {
 		struct fal_attribute_t fnhg_attr = {
@@ -2569,7 +2602,7 @@ int fal_ip6_upd_route(vrfid_t vrf_id, fal_object_t vrf_obj,
 				.value.objid = nhg_object };
 
 		ret = fal_ip_upd_route(__vrf_id, vrf_obj, &faddr, prefixlen,
-				       tableid, &fnhg_attr);
+				       tableid, &fnhg_attr, FAL_OP_GROUP_IPV6);
 	}
 
 	return ret;
@@ -2588,7 +2621,8 @@ int fal_ip4_del_route(vrfid_t vrf_id, fal_object_t vrf_obj,
 	if (!fal_plugins_present())
 		return 0;
 
-	return fal_ip_del_route(__vrf_id, vrf_obj, &faddr, prefixlen, tableid);
+	return fal_ip_del_route(__vrf_id, vrf_obj, &faddr, prefixlen, tableid,
+				FAL_OP_GROUP_IP);
 }
 
 int fal_ip6_del_route(vrfid_t vrf_id, fal_object_t vrf_obj,
@@ -2604,7 +2638,8 @@ int fal_ip6_del_route(vrfid_t vrf_id, fal_object_t vrf_obj,
 	if (!fal_plugins_present())
 		return 0;
 
-	return fal_ip_del_route(__vrf_id, vrf_obj, &faddr, prefixlen, tableid);
+	return fal_ip_del_route(__vrf_id, vrf_obj, &faddr, prefixlen, tableid,
+				FAL_OP_GROUP_IPV6);
 }
 
 int fal_ip4_get_route_attrs(vrfid_t vrf_id, fal_object_t vrf_obj,
@@ -2619,7 +2654,8 @@ int fal_ip4_get_route_attrs(vrfid_t vrf_id, fal_object_t vrf_obj,
 	};
 
 	return fal_ip_get_route_attrs(__vrf_id, vrf_obj, &faddr, prefixlen,
-				      tableid, attr_count, attr_list);
+				      tableid, attr_count, attr_list,
+				      FAL_OP_GROUP_IP);
 }
 
 int fal_ip6_get_route_attrs(vrfid_t vrf_id, fal_object_t vrf_obj,
@@ -2635,7 +2671,8 @@ int fal_ip6_get_route_attrs(vrfid_t vrf_id, fal_object_t vrf_obj,
 	};
 
 	return fal_ip_get_route_attrs(__vrf_id, vrf_obj, &faddr, prefixlen,
-				      tableid, attr_count, attr_list);
+				      tableid, attr_count, attr_list,
+				      FAL_OP_GROUP_IPV6);
 }
 
 /* IP Multicast operations */
