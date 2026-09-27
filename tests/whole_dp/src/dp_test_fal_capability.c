@@ -242,6 +242,58 @@ DP_START_TEST(fal_cap, route_records_its_backend)
 } DP_END_TEST;
 
 /*
+ * The v4/v6 wrinkle, discriminated.
+ *
+ * fal-test declares ipv4 true and ipv6 false; fal-test-b the opposite (see
+ * the file header and backend_identity). v4 and v6 routes share one handler
+ * struct (fal_ip_ops) and dispatch through the same op_type token ("ip"), so
+ * before the capability used to pick a backend could differ per call, every
+ * route -- v4 or v6 -- was checked against FAL_CAP_IPV4 alone. A v6 route
+ * would then have matched fal-test, whose new_route happily accepts any
+ * address family (it does not check), and recorded backend "fal-test" for an
+ * object that backend never actually declared it could offload -- a wrong
+ * answer reachability testing cannot catch, because the route still forwards
+ * either way.
+ *
+ * fal-test-b deliberately implements no route entry points at all (see its
+ * own file header: "any op it implemented would be a second reason a test
+ * could pass"), so this cannot assert success the way route_records_its_backend
+ * does for v4 -- there is no working v6 backend to succeed against. What it
+ * can assert, and what actually distinguishes the fix from its absence, is
+ * where the *unsuccessful* attempt landed: "dpa object show route6" is
+ * unfiltered by state, so the object appears either way, recording which
+ * backend was actually asked. Before the fix it would be "fal-test",
+ * state "full" -- a real, wrongly-attributed success. After it, "sw-dataplane",
+ * state "no_support" -- correctly asked of a backend that says no, not of the
+ * one that would have said yes for the wrong reason.
+ */
+DP_START_TEST(fal_cap, route6_dispatches_by_its_own_capability)
+{
+	json_object *expected;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1:1:1::1/64");
+	dp_test_netlink_add_route("2010:73:73::/64 nh 1:1:1::2 int:dp1T0");
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"dpa_objects\": {"
+		"        \"objects\": ["
+		"            { \"class\": \"route6\","
+		"              \"state\": \"no_support\","
+		"              \"backend\": \"sw-dataplane\" }"
+		"        ]"
+		"    }"
+		"}");
+	dp_test_check_json_state("dpa object show route6", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+	dp_test_netlink_del_route("2010:73:73::/64 nh 1:1:1::2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1:1:1::1/64");
+
+} DP_END_TEST;
+
+/*
  * The uniform object view: one shape for every class, and a class list that
  * says which classes can be walked.
  *

@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.43) unstable; urgency=medium
+
+  * fal: v6 routes now select a backend by IPV6 capability, not IPV4 -- v4 and v6 routes share fal_ip_ops and dispatched through the same op_type token, so the capability checked for backend selection was IPV4 for both; a backend that declares ipv4 true and ipv6 false could win a v6 route's dispatch and record a success it never actually offered
+
+ -- DANOS Open <miwide20190328@gmail.com>  Sun, 28 Sep 2026 01:00:00 +0800
+
 vyatta-dataplane (3.14.42) unstable; urgency=medium
 
   * dpa: list routed ports as not_needed in the interface class, instead of leaving them out

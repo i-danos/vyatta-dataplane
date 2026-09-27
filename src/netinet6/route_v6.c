@@ -254,7 +254,7 @@ route_lpm6_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 					       hops, size, nhg_fal_obj);
 		}
 		if (update_pd_state)
-			pd_state_set(pd_state, rc, FAL_OP_GROUP_IP);
+			pd_state_set(pd_state, rc, FAL_OP_GROUP_IPV6);
 		if (!rc || old_pd_state->created)
 			pd_state->created = true;
 		route6_hw_stats[old_pd_state->state]--;
@@ -271,7 +271,7 @@ route_lpm6_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 	rc = fal_ip6_new_route(vrf_id, vrf_obj, ip, depth, tableid,
 			       hops, size, nhg_fal_obj);
 	if (update_pd_state)
-		pd_state_set(pd_state, rc, FAL_OP_GROUP_IP);
+		pd_state_set(pd_state, rc, FAL_OP_GROUP_IPV6);
 	if (!rc)
 		pd_state->created = true;
 	route6_hw_stats[pd_state->state]++;
@@ -343,7 +343,7 @@ route_lpm6_delete(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 					       hops, size, nhg_fal_obj);
 		}
 		if (update_new_pd_state)
-			pd_state_set(new_pd_state, rc, FAL_OP_GROUP_IP);
+			pd_state_set(new_pd_state, rc, FAL_OP_GROUP_IPV6);
 		if (!rc || pd_state.created)
 			new_pd_state->created = true;
 		route6_hw_stats[pd_state.state]--;
@@ -464,7 +464,7 @@ route_lpm6_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 	if (!rc || pd_state.created)
 		new_pd_state->created = true;
 	if (update_new_pd_state)
-		pd_state_set(new_pd_state, rc, FAL_OP_GROUP_IP);
+		pd_state_set(new_pd_state, rc, FAL_OP_GROUP_IPV6);
 	route6_hw_stats[new_pd_state->state]++;
 	/* Successfully added to SW, so return success. */
 	return 0;
@@ -2939,7 +2939,7 @@ static void route6_fal_upd_for_changed_nhl(
 			       table_id, nextl->siblings,
 			       nextl->nsiblings, nextl->nhg_fal_obj);
 
-	pd_state_set(pd_state, rc, FAL_OP_GROUP_IP);
+	pd_state_set(pd_state, rc, FAL_OP_GROUP_IPV6);
 
 	/* Kick trackers so that clients can learn about FAL changes */
 	params->call_tracker_cbs = true;
