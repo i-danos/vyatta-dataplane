@@ -33,6 +33,7 @@
 
 #include "commands.h"
 #include "compiler.h"
+#include "dpa_object.h"
 #include "dp_event.h"
 #include "ether.h"
 #include "fal.h"
@@ -5274,6 +5275,157 @@ qos_if_feat_mode_change(struct ifnet *ifp, enum if_feat_mode_event event)
 	} else {
 		qos_sched_stop(ifp);
 	}
+}
+
+/*
+ * DPA objects for the classes "qos-if" and "qos-vlan".
+ *
+ * "qos-if" is one scheduler per interface (struct sched_info); "qos-vlan" is
+ * one subport per VLAN under it. Both are enumerated from that software state
+ * rather than from the object database qos_hw.c keeps, because that database
+ * is written only by the FAL (hardware) path: a walker built on it would answer
+ * an empty list on every box that does its QoS in software, which cannot be
+ * told from "no QoS configured" -- the same absent-versus-not-carried confusion
+ * the class list in dpa_object.c exists to prevent. The database is consulted
+ * only to say how far a hardware-backed object actually got.
+ *
+ * The state is the nearest true statement the shared enum allows:
+ *   no_support  the scheduler was configured for one side of hw_forwarding and
+ *               the port is on the other; qos_if_link_change() will not start
+ *               it, so the policy is not in effect (see its comment).
+ *   not_needed  configured, but nothing has been instantiated yet -- the
+ *               software scheduler or the hardware objects are only created
+ *               when the link comes up with a known speed.
+ *   full        a software scheduler is running, or the hardware programming
+ *               finished.
+ *   partial     hardware programming incomplete (some subports failed, or still
+ *               in flight when read).
+ *   error       hardware programming failed outright.
+ * An object whose hardware teardown is under way is left out: it is going away
+ * rather than being unreported.
+ */
+struct qos_dpa_walk {
+	json_writer_t *json;
+	enum pd_obj_state subset;
+	bool vlans;
+};
+
+static bool qos_dpa_hw_state(enum qos_obj_db_level level, uint32_t *ids,
+			     bool *going_away, enum pd_obj_state *state)
+{
+	struct qos_obj_db_obj *db_obj;
+	enum qos_obj_sw_state sw;
+
+	*going_away = false;
+	if (qos_obj_db_retrieve(level, ids, &db_obj) != QOS_OBJ_DB_STATUS_SUCCESS)
+		return false;
+
+	qos_obj_db_sw_get(db_obj, &sw);
+	switch (sw) {
+	case QOS_OBJ_SW_STATE_HW_PROG_SUCCESSFUL:
+		*state = PD_OBJ_STATE_FULL;
+		break;
+	case QOS_OBJ_SW_STATE_HW_PROG_FAILED:
+		*state = PD_OBJ_STATE_ERROR;
+		break;
+	case QOS_OBJ_SW_STATE_HW_DEL_IN_PROGRESS:
+	case QOS_OBJ_SW_STATE_HW_DEL_COMPLETE:
+		*going_away = true;
+		return true;
+	default:
+		/* PARTIAL, and the transient allocated / in-progress states. */
+		*state = PD_OBJ_STATE_PARTIAL;
+		break;
+	}
+	return true;
+}
+
+static void qos_dpa_emit_one(struct qos_dpa_walk *w, struct ifnet *ifp,
+			     struct sched_info *qinfo, const char *class_name,
+			     const char *key, enum qos_obj_db_level level,
+			     uint32_t *ids)
+{
+	enum pd_obj_state state;
+	uint16_t backend = PD_BACKEND_NONE;
+	bool going_away;
+
+	if (!ifp->hw_forwarding) {
+		/* Software port. A hardware-configured scheduler cannot run. */
+		if (qinfo->dev_id == QOS_HW_ID)
+			state = PD_OBJ_STATE_NO_SUPPORT;
+		else
+			state = qinfo->dev_info.dpdk.port ? PD_OBJ_STATE_FULL :
+							    PD_OBJ_STATE_NOT_NEEDED;
+	} else if (qinfo->dev_id != QOS_HW_ID) {
+		/* Hardware port with a software scheduler: never started. */
+		state = PD_OBJ_STATE_NO_SUPPORT;
+	} else if (qos_dpa_hw_state(level, ids, &going_away, &state)) {
+		if (going_away)
+			return;
+		backend = pd_backend_for(state, FAL_OP_GROUP_QOS);
+	} else {
+		state = PD_OBJ_STATE_NOT_NEEDED;
+	}
+
+	if (w->subset != PD_OBJ_STATE_LAST && state != w->subset)
+		return;
+	dpa_object_emit_raw(w->json, class_name, key, state, backend);
+}
+
+static void qos_dpa_emit(struct ifnet *ifp, void *arg)
+{
+	struct qos_dpa_walk *w = arg;
+	struct sched_info *qinfo = rcu_dereference(ifp->if_qos);
+	uint32_t ids[QOS_OBJ_DB_ID_ARRAY_LEN] = { 0 };
+	char key[IFNAMSIZ + 16];
+	uint32_t i;
+
+	if (!qinfo)
+		return;
+
+	ids[QOS_OBJ_DB_LEVEL_PORT] = ifp->if_index;
+
+	if (!w->vlans) {
+		snprintf(key, sizeof(key), "qos-if:%s", ifp->if_name);
+		qos_dpa_emit_one(w, ifp, qinfo, "qos-if", key,
+				 QOS_OBJ_DB_LEVEL_PORT, ids);
+		return;
+	}
+
+	/* Subport 0 is the port's default, not a VLAN. */
+	if (!qinfo->subport)
+		return;
+	for (i = 1; i < qinfo->n_subports; i++) {
+		if (!qinfo->subport[i].vlan_id)
+			continue;
+		ids[QOS_OBJ_DB_LEVEL_SUBPORT] = i;
+		snprintf(key, sizeof(key), "qos-vlan:%s/%u", ifp->if_name,
+			 qinfo->subport[i].vlan_id);
+		qos_dpa_emit_one(w, ifp, qinfo, "qos-vlan", key,
+				 QOS_OBJ_DB_LEVEL_SUBPORT, ids);
+	}
+}
+
+int qos_if_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
+{
+	struct qos_dpa_walk w = { .json = json, .subset = subset,
+				  .vlans = false };
+
+	rcu_read_lock();
+	dp_ifnet_walk(qos_dpa_emit, &w);
+	rcu_read_unlock();
+	return 0;
+}
+
+int qos_vlan_get_dpa_objects(json_writer_t *json, enum pd_obj_state subset)
+{
+	struct qos_dpa_walk w = { .json = json, .subset = subset,
+				  .vlans = true };
+
+	rcu_read_lock();
+	dp_ifnet_walk(qos_dpa_emit, &w);
+	rcu_read_unlock();
+	return 0;
 }
 
 static const struct dp_event_ops qos_events = {

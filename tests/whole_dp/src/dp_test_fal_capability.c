@@ -353,8 +353,8 @@ DP_START_TEST(fal_cap, dpa_object_names_what_it_cannot_walk)
 		"            { \"class\": \"mroute6\",    \"enumerable\": true },"
 		"            { \"class\": \"mpls-route\", \"enumerable\": true },"
 		"            { \"class\": \"vrf\",        \"enumerable\": true },"
-		"            { \"class\": \"qos-if\",     \"enumerable\": false,"
-		"              \"reason\": \"no walker\" }"
+		"            { \"class\": \"qos-if\",     \"enumerable\": true },"
+		"            { \"class\": \"qos-vlan\",   \"enumerable\": true }"
 		"        ]"
 		"    }"
 		"}");
