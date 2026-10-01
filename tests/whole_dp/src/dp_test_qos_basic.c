@@ -1244,6 +1244,221 @@ DP_START_TEST(qos_basic_ipv4, vlan_subport_map)
 } DP_END_TEST;
 
 /*
+ * "dpa object show qos-if" / "qos-vlan": the DPA walkers for the two QoS
+ * classes, which used to answer "no walker".
+ *
+ * What this has to be able to tell apart is an empty answer that means "no QoS
+ * is configured" from one that means "QoS is configured and the walker cannot
+ * see it" -- the second is what a walker built on the hardware object database
+ * would produce here, since this is a software port and that database is
+ * written only by the FAL path. So the test asserts the objects exist after
+ * configuring a scheduler with two VLAN subports, and that they are gone again
+ * after deleting it.
+ */
+static json_object *qos_dpa_show(const char *cls, const char *state)
+{
+	char cmd[TEST_MAX_CMD_LEN];
+	char *reply, *wrapped;
+	json_object *j_top, *j_dpa = NULL;
+	bool err;
+
+	if (state)
+		snprintf(cmd, sizeof(cmd), "dpa object show %s %s", cls,
+			 state);
+	else
+		snprintf(cmd, sizeof(cmd), "dpa object show %s", cls);
+
+	reply = dp_test_console_request_w_err(cmd, &err, false);
+	dp_test_fail_unless(reply && !err, "\"%s\" failed", cmd);
+
+	/*
+	 * The reply is a complete object when the console frames it, a bare
+	 * "name": value pair when it does not; accept either.
+	 */
+	wrapped = malloc(strlen(reply) + 3);
+	dp_test_assert_internal(wrapped);
+	if (reply[strspn(reply, " \t\r\n")] == '{')
+		strcpy(wrapped, reply);
+	else
+		sprintf(wrapped, "{%s}", reply);
+	j_top = json_tokener_parse(wrapped);
+	dp_test_fail_unless(j_top, "\"%s\" reply is not JSON: %s", cmd,
+			    reply);
+	free(wrapped);
+	free(reply);
+
+	json_object_object_get_ex(j_top, "dpa_objects", &j_dpa);
+	dp_test_fail_unless(j_dpa, "\"%s\" reply has no dpa_objects", cmd);
+	json_object_get(j_dpa);
+	json_object_put(j_top);
+	return j_dpa;
+}
+
+static bool qos_dpa_class_enumerable(json_object *j_dpa, const char *cls)
+{
+	json_object *j_classes, *j_c, *j_name, *j_enum;
+	size_t i;
+
+	json_object_object_get_ex(j_dpa, "classes", &j_classes);
+	for (i = 0; j_classes && i < json_object_array_length(j_classes); i++) {
+		j_c = json_object_array_get_idx(j_classes, i);
+		json_object_object_get_ex(j_c, "class", &j_name);
+		if (!j_name || strcmp(json_object_get_string(j_name), cls))
+			continue;
+		json_object_object_get_ex(j_c, "enumerable", &j_enum);
+		return j_enum && json_object_get_boolean(j_enum);
+	}
+	return false;
+}
+
+/* The object with this key, or NULL; counts all objects in *count. */
+static json_object *qos_dpa_find(json_object *j_dpa, const char *key,
+				 int *count)
+{
+	json_object *j_objs, *j_o, *j_key, *found = NULL;
+	int i;
+
+	json_object_object_get_ex(j_dpa, "objects", &j_objs);
+	*count = j_objs ? (int)json_object_array_length(j_objs) : 0;
+	for (i = 0; i < *count; i++) {
+		j_o = json_object_array_get_idx(j_objs, i);
+		json_object_object_get_ex(j_o, "key", &j_key);
+		if (j_key && !strcmp(json_object_get_string(j_key), key))
+			found = j_o;
+	}
+	return found;
+}
+
+static void qos_dpa_check_sw_object(json_object *j_obj, const char *key)
+{
+	json_object *j_state, *j_backend;
+	const char *state;
+
+	dp_test_fail_unless(j_obj, "no DPA object for %s", key);
+	json_object_object_get_ex(j_obj, "state", &j_state);
+	json_object_object_get_ex(j_obj, "backend", &j_backend);
+	dp_test_fail_unless(j_state && j_backend, "%s: missing field", key);
+
+	/*
+	 * full if the software scheduler is running, not_needed if it is
+	 * configured but the link has not brought it up yet. Anything else on a
+	 * software port would be wrong.
+	 */
+	state = json_object_get_string(j_state);
+	dp_test_fail_unless(!strcmp(state, "full") ||
+			    !strcmp(state, "not_needed"),
+			    "%s: unexpected state \"%s\"", key, state);
+	dp_test_fail_unless(!strcmp(json_object_get_string(j_backend),
+				    "sw-dataplane"),
+			    "%s: unexpected backend \"%s\"", key,
+			    json_object_get_string(j_backend));
+}
+
+/*
+ * Config sent to the dataplane takes effect asynchronously -- the attach
+ * helper in dp_test_qos_lib.c polls for exactly that reason -- while the
+ * delete helper does not, so a query straight after "qos <if> disable" can
+ * race it. Poll, bounded, and on timeout fail with what was last seen.
+ */
+static void qos_dpa_wait_count(const char *cls, int want)
+{
+	json_object *j_dpa;
+	char last[DP_TEST_TMP_BUF] = "";
+	int count = -1;
+	int tries;
+
+	for (tries = 0; tries < 100; tries++) {
+		j_dpa = qos_dpa_show(cls, NULL);
+		qos_dpa_find(j_dpa, "", &count);
+		if (count == want) {
+			json_object_put(j_dpa);
+			return;
+		}
+		snprintf(last, sizeof(last), "%s",
+			 json_object_to_json_string(j_dpa));
+		json_object_put(j_dpa);
+		usleep(50 * 1000);
+	}
+	dp_test_fail("%s: %d objects after delete, want %d: %s", cls, count,
+		     want, last);
+}
+
+DP_START_TEST(qos_basic_ipv4, dpa_qos_objects)
+{
+	bool debug = (dp_test_debug_get() == 2 ? true : false);
+	char real_if[IFNAMSIZ];
+	char key[IFNAMSIZ + 16];
+	json_object *j_dpa;
+	int count;
+
+	qos_lib_test_setup();
+	dp_test_intf_real("dp2T1", real_if);
+
+	dp_test_intf_vif_create("dp2T1.10", "dp2T1", 10);
+	dp_test_nl_add_ip_addr_and_connected("dp2T1.10", "3.3.3.3/24");
+	dp_test_intf_vif_create("dp2T1.20", "dp2T1", 20);
+	dp_test_nl_add_ip_addr_and_connected("dp2T1.20", "4.4.4.4/24");
+
+	/* Nothing configured: both classes are walkable, and empty. */
+	j_dpa = qos_dpa_show("qos-if", NULL);
+	dp_test_fail_unless(qos_dpa_class_enumerable(j_dpa, "qos-if"),
+			    "qos-if is not enumerable");
+	qos_dpa_find(j_dpa, "", &count);
+	dp_test_fail_unless(count == 0, "qos-if: %d objects before config",
+			    count);
+	json_object_put(j_dpa);
+
+	j_dpa = qos_dpa_show("qos-vlan", NULL);
+	dp_test_fail_unless(qos_dpa_class_enumerable(j_dpa, "qos-vlan"),
+			    "qos-vlan is not enumerable");
+	qos_dpa_find(j_dpa, "", &count);
+	dp_test_fail_unless(count == 0, "qos-vlan: %d objects before config",
+			    count);
+	json_object_put(j_dpa);
+
+	dp_test_qos_debug(debug);
+	dp_test_qos_attach_config_to_if("dp2T1", vlan_subport_map_cmds, debug);
+
+	/* One scheduler on the port... */
+	j_dpa = qos_dpa_show("qos-if", NULL);
+	snprintf(key, sizeof(key), "qos-if:%s", real_if);
+	qos_dpa_check_sw_object(qos_dpa_find(j_dpa, key, &count), key);
+	dp_test_fail_unless(count == 1, "qos-if: %d objects, want 1", count);
+	json_object_put(j_dpa);
+
+	/* ...and a subport for each of the two VLANs, nothing else. */
+	j_dpa = qos_dpa_show("qos-vlan", NULL);
+	snprintf(key, sizeof(key), "qos-vlan:%s/10", real_if);
+	qos_dpa_check_sw_object(qos_dpa_find(j_dpa, key, &count), key);
+	snprintf(key, sizeof(key), "qos-vlan:%s/20", real_if);
+	qos_dpa_check_sw_object(qos_dpa_find(j_dpa, key, &count), key);
+	dp_test_fail_unless(count == 2, "qos-vlan: %d objects, want 2", count);
+	json_object_put(j_dpa);
+
+	/* The state filter excludes what does not match. */
+	j_dpa = qos_dpa_show("qos-if", "error");
+	qos_dpa_find(j_dpa, "", &count);
+	dp_test_fail_unless(count == 0,
+			    "qos-if error filter returned %d objects", count);
+	json_object_put(j_dpa);
+
+	/* Deleting the scheduler removes the objects again. */
+	dp_test_qos_delete_config_from_if("dp2T1", debug);
+	dp_test_qos_debug(false);
+
+	qos_dpa_wait_count("qos-if", 0);
+	qos_dpa_wait_count("qos-vlan", 0);
+
+	dp_test_nl_del_ip_addr_and_connected("dp2T1.10", "3.3.3.3/24");
+	dp_test_intf_vif_del("dp2T1.10", 10);
+	dp_test_nl_del_ip_addr_and_connected("dp2T1.20", "4.4.4.4/24");
+	dp_test_intf_vif_del("dp2T1.20", 20);
+
+	qos_lib_test_teardown();
+
+} DP_END_TEST;
+
+/*
  * npf_rules_checks sets up a couple of "match" rules and checks that op-mode
  * state returns the correct information for them.
  *

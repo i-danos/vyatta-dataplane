@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.44) unstable; urgency=medium
+
+  * dpa: qos-if and qos-vlan classes are now enumerable -- both reported "no walker", which a reader cannot tell apart from "no QoS configured"; the walkers report software scheduler state (one qos-if per port, one qos-vlan per vlan subport), consulting the hardware object database only on the FAL path, and diagnose only (no repair)
+
+ -- DANOS Open <miwide20190328@gmail.com>  Thu, 01 Oct 2026 01:00:00 +0800
+
 vyatta-dataplane (3.14.43) unstable; urgency=medium
 
   * fal: v6 routes now select a backend by IPV6 capability, not IPV4 -- v4 and v6 routes share fal_ip_ops and dispatched through the same op_type token, so the capability checked for backend selection was IPV4 for both; a backend that declares ipv4 true and ipv6 false could win a v6 route's dispatch and record a success it never actually offered

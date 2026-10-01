@@ -17,11 +17,12 @@
 /*
  * The classes, and whether each can be walked.
  *
- * Eight of the ten can be walked. The two QoS classes cannot -- they have no
- * walker at all -- and saying so, with the reason, is the point of this table:
- * something reconciling would read a class it cannot walk as a class with
- * nothing in it, then be confidently silent about every object in it. A reader
- * that cannot tell "absent" from "not carried" will read one as the other.
+ * All ten can be walked. This table records, with the reason, any class that
+ * cannot be -- the two QoS classes were in that position until they gained
+ * walkers -- because something reconciling would read a class it cannot walk as
+ * a class with nothing in it, then be confidently silent about every object in
+ * it. A reader that cannot tell "absent" from "not carried" will read one as
+ * the other.
  *
  * The six carry their backend in three different containers -- a struct for
  * routes, bitfields in the MPLS node, two named fields in the multicast
@@ -38,8 +39,8 @@ static const struct dpa_obj_class dpa_classes[] = {
 	{ "vrf",        vrf_get_dpa_objects,     NULL },
 	{ "nexthop-group", nexthop_get_dpa_objects, NULL },
 	{ "interface",  if_get_dpa_objects,      NULL },
-	{ "qos-if",     NULL, "no walker" },
-	{ "qos-vlan",   NULL, "no walker" },
+	{ "qos-if",     qos_if_get_dpa_objects,   NULL },
+	{ "qos-vlan",   qos_vlan_get_dpa_objects, NULL },
 	{ NULL, NULL, NULL },
 };
 
