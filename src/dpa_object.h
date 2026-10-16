@@ -87,6 +87,28 @@ void dpa_object_emit_owned(json_writer_t *json, const char *class_name,
 			   const struct pd_obj_state_and_flags *pd_state,
 			   bool owned);
 
+/*
+ * The same object, left open so the caller can add class-specific fields
+ * before closing it with dpa_object_end(). dpa_object_emit_owned() is this
+ * plus the close; a route walker uses the open form to attach the next hops.
+ */
+void dpa_object_start_owned(json_writer_t *json, const char *class_name,
+			    const char *key,
+			    const struct pd_obj_state_and_flags *pd_state,
+			    bool owned);
+void dpa_object_end(json_writer_t *json);
+
+struct next_hop_list;
+
+/*
+ * Write "nh_index" and "next_hops" into the open object: one entry per
+ * sibling with its kind, gateway and interface, and whether it is dead or a
+ * backup. `af` is AF_INET or AF_INET6. A reader comparing this against
+ * zebra's next hops needs the content, not only the existence of the route.
+ */
+void dpa_object_write_next_hops(json_writer_t *json, uint32_t nh_index,
+				const struct next_hop_list *nextl, int af);
+
 void dpa_object_emit(json_writer_t *json, const char *class_name,
 		     const char *key,
 		     const struct pd_obj_state_and_flags *pd_state);
