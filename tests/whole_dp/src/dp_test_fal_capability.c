@@ -519,3 +519,74 @@ DP_START_TEST(fal_cap, two_defaults_are_two_objects)
 	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
 
 } DP_END_TEST;
+
+/*
+ * A route object carries its next hops, not only its existence.
+ *
+ * The object view said which routes the data plane held and nothing about
+ * where they went, so comparing it with zebra could show a route missing and
+ * never a route present with the wrong (or dead) next hop. That is the kind of
+ * disagreement a link fault produces, and the one the view could not have shown.
+ *
+ * Asserted for both families and for a gateway and a directly connected route in
+ * the same run, because "every next hop has a via" and "no next hop has one" are
+ * equally what a field wired to a constant looks like.
+ */
+DP_START_TEST(fal_cap, dpa_route_object_carries_next_hops)
+{
+	json_object *expected;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+	dp_test_netlink_add_route("10.77.0.0/24 nh 1.1.1.2 int:dp1T0");
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"dpa_objects\": {"
+		"        \"objects\": ["
+		"            { \"key\": \"vrf:default/table:254/10.77.0.0/24/scope:0\","
+		"              \"next_hops\": ["
+		"                  { \"kind\": \"gateway\","
+		"                    \"via\": \"1.1.1.2\","
+		"                    \"ifname\": \"dp1T0\","
+		"                    \"dead\": false,"
+		"                    \"backup\": false }"
+		"              ] },"
+		"            { \"key\": \"vrf:default/table:254/1.1.1.0/24/scope:253\","
+		"              \"next_hops\": ["
+		"                  { \"kind\": \"directly connected\","
+		"                    \"ifname\": \"dp1T0\" }"
+		"              ] }"
+		"        ]"
+		"    }"
+		"}");
+	dp_test_check_json_state("dpa object show route", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+	dp_test_netlink_del_route("10.77.0.0/24 nh 1.1.1.2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1:1:1::1/64");
+	dp_test_netlink_add_route("2010:77:77::/64 nh 1:1:1::2 int:dp1T0");
+
+	expected = dp_test_json_create(
+		"{"
+		"    \"dpa_objects\": {"
+		"        \"objects\": ["
+		"            { \"class\": \"route6\","
+		"              \"next_hops\": ["
+		"                  { \"kind\": \"gateway\","
+		"                    \"via\": \"1:1:1::2\","
+		"                    \"ifname\": \"dp1T0\" }"
+		"              ] }"
+		"        ]"
+		"    }"
+		"}");
+	dp_test_check_json_state("dpa object show route6", expected,
+				 DP_TEST_JSON_CHECK_SUBSET, false);
+	json_object_put(expected);
+
+	dp_test_netlink_del_route("2010:77:77::/64 nh 1:1:1::2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1:1:1::1/64");
+
+} DP_END_TEST;

@@ -5,12 +5,19 @@
  * SPDX-License-Identifier: LGPL-2.1-only
  */
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
 
 #include "dpa_object.h"
 #include "fal.h"
 #include "fal_capability.h"
+#include "if_var.h"
+#include "ip_forward.h"
+#include "nh_common.h"
+#include "route_flags.h"
 #include "json_writer.h"
 #include "pd_show.h"
 
@@ -66,10 +73,10 @@ void dpa_object_emit(json_writer_t *json, const char *class_name,
 			    pd_state->backend);
 }
 
-void dpa_object_emit_owned(json_writer_t *json, const char *class_name,
-			   const char *key,
-			   const struct pd_obj_state_and_flags *pd_state,
-			   bool owned)
+void dpa_object_start_owned(json_writer_t *json, const char *class_name,
+			    const char *key,
+			    const struct pd_obj_state_and_flags *pd_state,
+			    bool owned)
 {
 	jsonw_start_object(json);
 	jsonw_string_field(json, "class", class_name);
@@ -86,7 +93,72 @@ void dpa_object_emit_owned(json_writer_t *json, const char *class_name,
 	 * prevent one level up.
 	 */
 	jsonw_bool_field(json, "dataplane_owned", owned);
+}
+
+void dpa_object_end(json_writer_t *json)
+{
 	jsonw_end_object(json);
+}
+
+void dpa_object_emit_owned(json_writer_t *json, const char *class_name,
+			   const char *key,
+			   const struct pd_obj_state_and_flags *pd_state,
+			   bool owned)
+{
+	dpa_object_start_owned(json, class_name, key, pd_state, owned);
+	dpa_object_end(json);
+}
+
+static const char *dpa_nh_kind(const struct next_hop *nh)
+{
+	if (nh->flags & RTF_BLACKHOLE)
+		return "blackhole";
+	if (nh->flags & (RTF_REJECT | RTF_NOROUTE))
+		return "unreachable";
+	if (nh->flags & RTF_LOCAL)
+		return "local";
+	if (nh->flags & RTF_SLOWPATH)
+		return "non-dataplane interface";
+	if (nh->flags & RTF_GATEWAY)
+		return "gateway";
+	return "directly connected";
+}
+
+void dpa_object_write_next_hops(json_writer_t *json, uint32_t nh_index,
+				const struct next_hop_list *nextl, int af)
+{
+	unsigned int i;
+
+	jsonw_uint_field(json, "nh_index", nh_index);
+	/*
+	 * Always an array, empty when the list is gone: a missing "next_hops"
+	 * would read as "this producer does not report them", the ambiguity the
+	 * ownership field above exists to avoid.
+	 */
+	jsonw_name(json, "next_hops");
+	jsonw_start_array(json);
+	for (i = 0; nextl && i < nextl->nsiblings; i++) {
+		const struct next_hop *nh = nextl->siblings + i;
+		const struct ifnet *ifp = dp_nh_get_ifp(nh);
+		char buf[INET6_ADDRSTRLEN];
+
+		jsonw_start_object(json);
+		jsonw_string_field(json, "kind", dpa_nh_kind(nh));
+		if (nh->flags & RTF_GATEWAY) {
+			const void *a = af == AF_INET6 ?
+				(const void *)&nh->gateway.address.ip_v6 :
+				(const void *)&nh->gateway.address.ip_v4;
+
+			if (inet_ntop(af, a, buf, sizeof(buf)))
+				jsonw_string_field(json, "via", buf);
+		}
+		if (ifp)
+			jsonw_string_field(json, "ifname", ifp->if_name);
+		jsonw_bool_field(json, "dead", !!(nh->flags & RTF_DEAD));
+		jsonw_bool_field(json, "backup", !!(nh->flags & RTF_BACKUP));
+		jsonw_end_object(json);
+	}
+	jsonw_end_array(json);
 }
 
 static int dpa_object_show(FILE *f, const char *name, enum pd_obj_state subset)

@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.45) unstable; urgency=medium
+
+  * dpa: route and route6 objects now carry their next hops ("nh_index" and a "next_hops" array: kind, gateway, interface, dead, backup) -- the object view said which routes the data plane held and nothing about where they went, so a route present with a wrong or dead next hop looked the same as a correct one; diagnose only (no repair)
+
+ -- DANOS Open <miwide20190328@gmail.com>  Fri, 16 Oct 2026 01:00:00 +0800
+
 vyatta-dataplane (3.14.44) unstable; urgency=medium
 
   * dpa: qos-if and qos-vlan classes are now enumerable -- both reported "no walker", which a reader cannot tell apart from "no QoS configured"; the walkers report software scheduler state (one qos-if per port, one qos-vlan per vlan subport), consulting the hardware object database only on the FAL path, and diagnose only (no repair)
