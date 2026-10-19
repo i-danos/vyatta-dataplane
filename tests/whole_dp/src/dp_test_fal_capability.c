@@ -535,11 +535,16 @@ DP_START_TEST(fal_cap, two_defaults_are_two_objects)
 DP_START_TEST(fal_cap, dpa_route_object_carries_next_hops)
 {
 	json_object *expected;
+	char ifname[IFNAMSIZ];
+	char json[1024];
+
+	/* The data plane reports the real interface name, not the test's. */
+	dp_test_intf_real("dp1T0", ifname);
 
 	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
 	dp_test_netlink_add_route("10.77.0.0/24 nh 1.1.1.2 int:dp1T0");
 
-	expected = dp_test_json_create(
+	snprintf(json, sizeof(json),
 		"{"
 		"    \"dpa_objects\": {"
 		"        \"objects\": ["
@@ -547,18 +552,19 @@ DP_START_TEST(fal_cap, dpa_route_object_carries_next_hops)
 		"              \"next_hops\": ["
 		"                  { \"kind\": \"gateway\","
 		"                    \"via\": \"1.1.1.2\","
-		"                    \"ifname\": \"dp1T0\","
+		"                    \"ifname\": \"%s\","
 		"                    \"dead\": false,"
 		"                    \"backup\": false }"
 		"              ] },"
 		"            { \"key\": \"vrf:default/table:254/1.1.1.0/24/scope:253\","
 		"              \"next_hops\": ["
 		"                  { \"kind\": \"directly connected\","
-		"                    \"ifname\": \"dp1T0\" }"
+		"                    \"ifname\": \"%s\" }"
 		"              ] }"
 		"        ]"
 		"    }"
-		"}");
+		"}", ifname, ifname);
+	expected = dp_test_json_create("%s", json);
 	dp_test_check_json_state("dpa object show route", expected,
 				 DP_TEST_JSON_CHECK_SUBSET, false);
 	json_object_put(expected);
@@ -569,19 +575,21 @@ DP_START_TEST(fal_cap, dpa_route_object_carries_next_hops)
 	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1:1:1::1/64");
 	dp_test_netlink_add_route("2010:77:77::/64 nh 1:1:1::2 int:dp1T0");
 
-	expected = dp_test_json_create(
+	snprintf(json, sizeof(json),
 		"{"
 		"    \"dpa_objects\": {"
 		"        \"objects\": ["
 		"            { \"class\": \"route6\","
+		"              \"key\": \"vrf:default/table:254/2010:77:77::/64/scope:0\","
 		"              \"next_hops\": ["
 		"                  { \"kind\": \"gateway\","
 		"                    \"via\": \"1:1:1::2\","
-		"                    \"ifname\": \"dp1T0\" }"
+		"                    \"ifname\": \"%s\" }"
 		"              ] }"
 		"        ]"
 		"    }"
-		"}");
+		"}", ifname);
+	expected = dp_test_json_create("%s", json);
 	dp_test_check_json_state("dpa object show route6", expected,
 				 DP_TEST_JSON_CHECK_SUBSET, false);
 	json_object_put(expected);
