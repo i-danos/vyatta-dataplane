@@ -105,6 +105,16 @@ void routing_insert_arp_safe(struct llentry *lle, bool arp_change);
 void routing_remove_arp_safe(struct llentry *lle);
 
 uint32_t *route_sw_stats_get(void);
+
+/*
+ * The data plane's own record that it finished programming a route: one NOTICE line per add or replace, written after the
+ * route is in the table and the forwarding backend (if any) has answered. See route_programmed_log() in route.c.
+ */
+struct pd_obj_state_and_flags;
+void route_programmed_log(const char *cls, const char *op, vrfid_t vrf_id,
+			  uint32_t table, const char *prefix, uint8_t depth,
+			  int16_t scope, enum pd_obj_state sw_state,
+			  const struct pd_obj_state_and_flags *obj);
 uint32_t *route_hw_stats_get(void);
 
 int route_get_pd_subset_data(json_writer_t *json, enum pd_obj_state subset);

@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <urcu/uatomic.h>
 
 #include "compiler.h"
@@ -154,6 +155,76 @@ route_nexthop_new(const struct next_hop *nh, uint16_t size, uint8_t proto,
 }
 
 /*
+ * The record that a route has been programmed.
+ *
+ * The data plane used to say nothing when it finished programming a route it had been handed: the only line on this path is the
+ * one written when the netlink message ARRIVES (DP_DEBUG_W_VRF in ip_netlink.c, before handle_route()), and the only lines written
+ * for the outcome are failures. So nothing could tell, from the log, that a delivery had completed.
+ *
+ * One line, key=value, written at the end of the add/replace, after lpm_add() and the FAL step have settled:
+ *
+ *   ROUTE: programmed cls=route op=add vrf=1 table=254 prefix=10.1.0.0/24 scope=0 result=ok sw_state=full state=full backend=fal-test mono_ns=... wall_ns=...
+ *
+ * The leading word "programmed" is what separates it from the delivery line, whose first word is RTM_NEWROUTE/RTM_DELROUTE.
+ *
+ * Two lanes are reported and neither is renamed for the other. `sw_state` is the software lane: what lpm_add() did, i.e. the same
+ * classification route_sw_stats[] counts (full = inserted, not_needed = a higher scope route already covers it, no_resource/error =
+ * not inserted). `result` is that classification and nothing else: full -> ok, not_needed -> not_needed, anything else -> error.
+ * `state` and `backend` are the object's own pd_state afterwards: the forwarding backend's answer (no_support on a data plane
+ * with no hardware backend) and which backend gave it, exactly as `dpa object show` prints them. `state=none backend=none` means
+ * no object exists (the add failed).
+ *
+ * NOTICE through RTE_LOG, not DP_DEBUG: DP_DEBUG is gated by the dp_debug bitmask and is off by default, so a debug-gated record
+ * would be missing from exactly the runs that want it.
+ */
+void route_programmed_log(const char *cls, const char *op, vrfid_t vrf_id,
+			  uint32_t table, const char *prefix, uint8_t depth,
+			  int16_t scope, enum pd_obj_state sw_state,
+			  const struct pd_obj_state_and_flags *obj)
+{
+	const char *result;
+	struct timespec mono, wall;
+
+	switch (sw_state) {
+	case PD_OBJ_STATE_FULL:
+		result = "ok";
+		break;
+	case PD_OBJ_STATE_NOT_NEEDED:
+		result = "not_needed";
+		break;
+	default:
+		result = "error";
+		break;
+	}
+
+	clock_gettime(CLOCK_MONOTONIC, &mono);
+	clock_gettime(CLOCK_REALTIME, &wall);
+
+	RTE_LOG(NOTICE, ROUTE,
+		"programmed cls=%s op=%s vrf=%u table=%u prefix=%s/%u scope=%d result=%s sw_state=%s state=%s backend=%s mono_ns=%llu wall_ns=%llu\n",
+		cls, op, dp_vrf_get_external_id(vrf_id), table, prefix, depth,
+		scope, result, pd_obj_state_name(sw_state),
+		obj ? pd_obj_state_name(obj->state) : "none",
+		obj ? (obj->backend == PD_BACKEND_NONE ?
+		       "sw-dataplane" : fal_backend_name(obj->backend)) : "none",
+		(unsigned long long)mono.tv_sec * 1000000000ULL + mono.tv_nsec,
+		(unsigned long long)wall.tv_sec * 1000000000ULL + wall.tv_nsec);
+}
+
+static void route_log_programmed4(const char *op, vrfid_t vrf_id,
+				  struct lpm *lpm, uint32_t ip, uint8_t depth,
+				  int16_t scope, enum pd_obj_state sw_state,
+				  const struct pd_obj_state_and_flags *obj)
+{
+	char addr[INET_ADDRSTRLEN];
+
+	if (!inet_ntop(AF_INET, &ip, addr, sizeof(addr)))
+		addr[0] = '\0';
+	route_programmed_log("route", op, vrf_id, lpm_get_id(lpm), addr, depth,
+			     scope, sw_state, obj);
+}
+
+/*
  * Wrapper round the lpm function. This one keeps track of the
  * failures and successes.
  */
@@ -170,6 +241,7 @@ route_lpm_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 	uint32_t old_nh;
 	bool demoted = false;
 	bool update_pd_state = true;
+	enum pd_obj_state sw_state = PD_OBJ_STATE_ERROR;
 	size_t size;
 
 	rc = lpm_add(lpm, ntohl(ip), depth, next_hop, scope, &pd_state,
@@ -178,6 +250,7 @@ route_lpm_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 	case LPM_SUCCESS:
 		/* Success */
 		route_sw_stats[PD_OBJ_STATE_FULL]++;
+		sw_state = PD_OBJ_STATE_FULL;
 		break;
 	case LPM_HIGHER_SCOPE_EXISTS:
 		/*
@@ -186,20 +259,28 @@ route_lpm_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 		 */
 		route_sw_stats[PD_OBJ_STATE_NOT_NEEDED]++;
 		pd_state->state = PD_OBJ_STATE_NOT_NEEDED;
+		route_log_programmed4("add", vrf_id, lpm, ip, depth, scope,
+				      PD_OBJ_STATE_NOT_NEEDED, pd_state);
 		return rc;
 	case LPM_LOWER_SCOPE_EXISTS:
 		/* Added, but lower scope route was demoted. */
 		demoted = true;
 		route_sw_stats[PD_OBJ_STATE_NOT_NEEDED]++;
+		/* the NEW route is in the table; it is the lower scope one that was demoted */
+		sw_state = PD_OBJ_STATE_FULL;
 		break;
 	case LPM_ALREADY_EXISTS:
 		/* Added, but already existed. */
 		return 0;
 	case -ENOSPC:
 		route_sw_stats[PD_OBJ_STATE_NO_RESOURCE]++;
+		route_log_programmed4("add", vrf_id, lpm, ip, depth, scope,
+				      PD_OBJ_STATE_NO_RESOURCE, NULL);
 		return rc;
 	default:
 		route_sw_stats[PD_OBJ_STATE_ERROR]++;
+		route_log_programmed4("add", vrf_id, lpm, ip, depth, scope,
+				      PD_OBJ_STATE_ERROR, NULL);
 		return rc;
 	}
 
@@ -230,6 +311,8 @@ route_lpm_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 		route_hw_stats[old_pd_state->state]--;
 		old_pd_state->state = PD_OBJ_STATE_NOT_NEEDED;
 		route_hw_stats[pd_state->state]++;
+		route_log_programmed4("add", vrf_id, lpm, ip, depth, scope,
+				      sw_state, pd_state);
 		/* Successfully added to SW, so return success. */
 		return 0;
 	}
@@ -245,6 +328,8 @@ route_lpm_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 	if (!rc)
 		pd_state->created = true;
 	route_hw_stats[pd_state->state]++;
+	route_log_programmed4("add", vrf_id, lpm, ip, depth, scope, sw_state,
+			      pd_state);
 
 	/*
 	 * If the SW worked, but the HW failed then return success. The
@@ -267,6 +352,7 @@ route_lpm_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 	uint32_t new_nh;
 	uint32_t dummy_old_nh;
 	bool update_new_pd_state = true;
+	enum pd_obj_state sw_state = PD_OBJ_STATE_ERROR;
 	enum pd_obj_state nhl_pd_state;
 	fal_object_t nhg_fal_obj;
 	struct next_hop *hops;
@@ -306,6 +392,7 @@ route_lpm_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 	case LPM_SUCCESS:
 		/* Success */
 		route_sw_stats[PD_OBJ_STATE_FULL]++;
+		sw_state = PD_OBJ_STATE_FULL;
 		break;
 	case LPM_HIGHER_SCOPE_EXISTS:
 		/*
@@ -313,13 +400,16 @@ route_lpm_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 		 * not needed in the fal.
 		 */
 		route_sw_stats[PD_OBJ_STATE_NOT_NEEDED]++;
+		sw_state = PD_OBJ_STATE_NOT_NEEDED;
 		break;
 	case LPM_LOWER_SCOPE_EXISTS:
 		/* Added, but lower scope route was demoted. */
 		route_sw_stats[PD_OBJ_STATE_NOT_NEEDED]++;
+		sw_state = PD_OBJ_STATE_FULL;
 		break;
 	case -ENOSPC:
 		route_sw_stats[PD_OBJ_STATE_NO_RESOURCE]++;
+		sw_state = PD_OBJ_STATE_NO_RESOURCE;
 		break;
 	default:
 		route_sw_stats[PD_OBJ_STATE_ERROR]++;
@@ -351,6 +441,11 @@ route_lpm_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm *lpm,
 	if (update_new_pd_state)
 		pd_state_set(new_pd_state, rc, FAL_OP_GROUP_IP);
 	route_hw_stats[new_pd_state->state]++;
+	/* a failed insert leaves no object to read (new_pd_state is not meaningful then) */
+	route_log_programmed4("update", vrf_id, lpm, ip, depth, scope, sw_state,
+			      (sw_state == PD_OBJ_STATE_FULL ||
+			       sw_state == PD_OBJ_STATE_NOT_NEEDED) ?
+			      new_pd_state : NULL);
 	/* Successfully added to SW, so return success. */
 	return 0;
 }

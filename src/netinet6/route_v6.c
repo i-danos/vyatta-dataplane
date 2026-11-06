@@ -31,6 +31,7 @@
 #include <urcu/uatomic.h>
 
 #include "dpa_object.h"
+#include "route.h"
 #include "compiler.h"
 #include "address.h"
 #include "compat.h"
@@ -185,6 +186,20 @@ route_nexthop6_new(struct next_hop *nh, uint16_t size,
 	return rc;
 }
 
+static void route_log_programmed6(const char *op, vrfid_t vrf_id,
+				  uint32_t tableid, const struct in6_addr *ip,
+				  uint8_t depth, int16_t scope,
+				  enum pd_obj_state sw_state,
+				  const struct pd_obj_state_and_flags *obj)
+{
+	char addr[INET6_ADDRSTRLEN];
+
+	if (!inet_ntop(AF_INET6, ip, addr, sizeof(addr)))
+		addr[0] = '\0';
+	route_programmed_log("route6", op, vrf_id, tableid, addr, depth, scope,
+			     sw_state, obj);
+}
+
 /*
  * Wrapper around the lpm function. This one keeps track of the
  * failures and successes.
@@ -203,6 +218,7 @@ route_lpm6_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 	uint32_t old_nh;
 	bool demoted = false;
 	bool update_pd_state = true;
+	enum pd_obj_state sw_state = PD_OBJ_STATE_ERROR;
 	size_t size;
 
 	rc = lpm6_add(lpm, ip->s6_addr, depth, next_hop, scope, &pd_state,
@@ -211,6 +227,7 @@ route_lpm6_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 	case LPM_SUCCESS:
 		/* Success */
 		route6_sw_stats[PD_OBJ_STATE_FULL]++;
+		sw_state = PD_OBJ_STATE_FULL;
 		break;
 	case LPM_HIGHER_SCOPE_EXISTS:
 		/*
@@ -219,17 +236,25 @@ route_lpm6_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 		 */
 		route6_sw_stats[PD_OBJ_STATE_NOT_NEEDED]++;
 		pd_state->state = PD_OBJ_STATE_NOT_NEEDED;
+		route_log_programmed6("add", vrf_id, tableid, ip, depth, scope,
+				      PD_OBJ_STATE_NOT_NEEDED, pd_state);
 		return rc;
 	case LPM_LOWER_SCOPE_EXISTS:
 		/* Added, but lower scope route was demoted. */
 		route6_sw_stats[PD_OBJ_STATE_NOT_NEEDED]++;
 		demoted = true;
+		/* the NEW route is in the table; it is the lower scope one that was demoted */
+		sw_state = PD_OBJ_STATE_FULL;
 		break;
 	case -ENOSPC:
 		route6_sw_stats[PD_OBJ_STATE_NO_RESOURCE]++;
+		route_log_programmed6("add", vrf_id, tableid, ip, depth, scope,
+				      PD_OBJ_STATE_NO_RESOURCE, NULL);
 		return rc;
 	default:
 		route6_sw_stats[PD_OBJ_STATE_ERROR]++;
+		route_log_programmed6("add", vrf_id, tableid, ip, depth, scope,
+				      PD_OBJ_STATE_ERROR, NULL);
 		return rc;
 	}
 
@@ -260,6 +285,8 @@ route_lpm6_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 		route6_hw_stats[old_pd_state->state]--;
 		old_pd_state->state = PD_OBJ_STATE_NOT_NEEDED;
 		route6_hw_stats[pd_state->state]++;
+		route_log_programmed6("add", vrf_id, tableid, ip, depth, scope,
+				      sw_state, pd_state);
 		/* Successfully added to SW, so return success. */
 		return 0;
 	}
@@ -275,6 +302,8 @@ route_lpm6_add(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 	if (!rc)
 		pd_state->created = true;
 	route6_hw_stats[pd_state->state]++;
+	route_log_programmed6("add", vrf_id, tableid, ip, depth, scope, sw_state,
+			      pd_state);
 
 	/*
 	 * If the SW worked, but the HW failed then return success. The
@@ -384,6 +413,7 @@ route_lpm6_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 	uint32_t new_nh;
 	uint32_t dummy_old_nh;
 	bool update_new_pd_state = true;
+	enum pd_obj_state sw_state = PD_OBJ_STATE_ERROR;
 	enum pd_obj_state nhl_pd_state;
 	fal_object_t nhg_fal_obj;
 	struct next_hop *hops;
@@ -423,6 +453,7 @@ route_lpm6_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 	case LPM_SUCCESS:
 		/* Success */
 		route6_sw_stats[PD_OBJ_STATE_FULL]++;
+		sw_state = PD_OBJ_STATE_FULL;
 		break;
 	case LPM_HIGHER_SCOPE_EXISTS:
 		/*
@@ -430,13 +461,16 @@ route_lpm6_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 		 * not needed in the fal.
 		 */
 		route6_sw_stats[PD_OBJ_STATE_NOT_NEEDED]++;
+		sw_state = PD_OBJ_STATE_NOT_NEEDED;
 		break;
 	case LPM_LOWER_SCOPE_EXISTS:
 		/* Added, but lower scope route was demoted. */
 		route6_sw_stats[PD_OBJ_STATE_NOT_NEEDED]++;
+		sw_state = PD_OBJ_STATE_FULL;
 		break;
 	case -ENOSPC:
 		route6_sw_stats[PD_OBJ_STATE_NO_RESOURCE]++;
+		sw_state = PD_OBJ_STATE_NO_RESOURCE;
 		break;
 	default:
 		route6_sw_stats[PD_OBJ_STATE_ERROR]++;
@@ -466,6 +500,11 @@ route_lpm6_update(vrfid_t vrf_id, fal_object_t vrf_obj, struct lpm6 *lpm,
 	if (update_new_pd_state)
 		pd_state_set(new_pd_state, rc, FAL_OP_GROUP_IPV6);
 	route6_hw_stats[new_pd_state->state]++;
+	/* a failed insert leaves no object to read (new_pd_state is not meaningful then) */
+	route_log_programmed6("update", vrf_id, tableid, ip, depth, scope, sw_state,
+			      (sw_state == PD_OBJ_STATE_FULL ||
+			       sw_state == PD_OBJ_STATE_NOT_NEEDED) ?
+			      new_pd_state : NULL);
 	/* Successfully added to SW, so return success. */
 	return 0;
 }

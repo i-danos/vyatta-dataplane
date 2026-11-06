@@ -1,3 +1,9 @@
+vyatta-dataplane (3.14.46) unstable; urgency=medium
+
+  * route: the data plane now writes one NOTICE line when it has finished programming a route it was handed ("ROUTE: programmed cls=route|route6 op=add|update vrf= table= prefix= scope= result= sw_state= state= backend= mono_ns= wall_ns="), after the route is in the table and the forwarding backend has answered. Until now the only line on that path was the one written when the netlink message ARRIVED, before installation, and the only lines about the outcome were failures, so nothing in the log could say a delivery had completed. `result` is the software lane's verdict (full -> ok, not_needed -> not_needed, otherwise error); `state` and `backend` are the object's own pd_state, the backend's answer. Deletes are not logged. RTE_LOG, not DP_DEBUG, so it is visible at the default level.
+
+ -- i-danos dev <dev@i-danos.dev>  Thu, 05 Nov 2026 01:00:00 +0800
+
 vyatta-dataplane (3.14.45) unstable; urgency=medium
 
   * dpa: route and route6 objects now carry their next hops ("nh_index" and a "next_hops" array: kind, gateway, interface, dead, backup) -- the object view said which routes the data plane held and nothing about where they went, so a route present with a wrong or dead next hop looked the same as a correct one; diagnose only (no repair)
