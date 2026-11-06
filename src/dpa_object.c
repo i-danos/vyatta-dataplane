@@ -161,6 +161,38 @@ void dpa_object_write_next_hops(json_writer_t *json, uint32_t nh_index,
 	jsonw_end_array(json);
 }
 
+/*
+ * Write the "classes" array for `table`, or only for the class called `name`. Returns whether any class matched.
+ *
+ * A class with no walker says why. jsonw_string() dereferences what it is given, so a class whose `not_enumerable` was left NULL
+ * -- which is every row's value today, there being no such class yet -- would have taken the whole data plane down at this point
+ * the first time one was added without a reason. It now says that no reason was recorded, which is true, instead of crashing.
+ * The table is a parameter so that this can be tested with a class the real table does not (and should not) contain.
+ */
+bool dpa_object_write_classes(json_writer_t *wr, const struct dpa_obj_class *table, const char *name)
+{
+	const struct dpa_obj_class *cls;
+	bool matched = false;
+
+	jsonw_name(wr, "classes");
+	jsonw_start_array(wr);
+	for (cls = table; cls->name; ++cls) {
+		if (name && strcmp(cls->name, name) != 0)
+			continue;
+		matched = true;
+		jsonw_start_object(wr);
+		jsonw_string_field(wr, "class", cls->name);
+		jsonw_bool_field(wr, "enumerable", cls->enumerate != NULL);
+		if (!cls->enumerate)
+			jsonw_string_field(wr, "reason", cls->not_enumerable ?
+					   cls->not_enumerable :
+					   DPA_NO_REASON_RECORDED);
+		jsonw_end_object(wr);
+	}
+	jsonw_end_array(wr);
+	return matched;
+}
+
 static int dpa_object_show(FILE *f, const char *name, enum pd_obj_state subset)
 {
 	const struct dpa_obj_class *cls;
@@ -174,20 +206,7 @@ static int dpa_object_show(FILE *f, const char *name, enum pd_obj_state subset)
 	jsonw_name(wr, "dpa_objects");
 	jsonw_start_object(wr);
 
-	jsonw_name(wr, "classes");
-	jsonw_start_array(wr);
-	for (cls = dpa_classes; cls->name; ++cls) {
-		if (name && strcmp(cls->name, name) != 0)
-			continue;
-		matched = true;
-		jsonw_start_object(wr);
-		jsonw_string_field(wr, "class", cls->name);
-		jsonw_bool_field(wr, "enumerable", cls->enumerate != NULL);
-		if (!cls->enumerate)
-			jsonw_string_field(wr, "reason", cls->not_enumerable);
-		jsonw_end_object(wr);
-	}
-	jsonw_end_array(wr);
+	matched = dpa_object_write_classes(wr, dpa_classes, name);
 
 	jsonw_name(wr, "objects");
 	jsonw_start_array(wr);

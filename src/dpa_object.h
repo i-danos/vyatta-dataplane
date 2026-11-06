@@ -54,6 +54,15 @@ struct dpa_obj_class {
 	const char *not_enumerable;
 };
 
+/* What `reason` says for a class that cannot be walked and has no reason written down. */
+#define DPA_NO_REASON_RECORDED "no reason recorded"
+
+/*
+ * The "classes" array of `dpa object show`, for `table` (terminated by a NULL name) or only the class called `name`.
+ * Returns whether any class matched; a name nobody recognises matches none.
+ */
+bool dpa_object_write_classes(json_writer_t *wr, const struct dpa_obj_class *table, const char *name);
+
 /*
  * Emit one object whose state and backend are not carried in a
  * struct pd_obj_state_and_flags -- the MPLS label table packs them into

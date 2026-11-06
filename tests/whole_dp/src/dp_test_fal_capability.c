@@ -21,11 +21,18 @@
  * reason.
  */
 
+#include <rte_log.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "dp_test.h"
 #include "dp_test_lib_internal.h"
 #include "dp_test_json_utils.h"
 #include "dp_test_netlink_state_internal.h"
 #include "dp_test_lib_intf_internal.h"
+#include "dpa_object.h"
+#include "json_writer.h"
 
 DP_DECL_TEST_SUITE(fal_capability_suite);
 
@@ -596,5 +603,198 @@ DP_START_TEST(fal_cap, dpa_route_object_carries_next_hops)
 
 	dp_test_netlink_del_route("2010:77:77::/64 nh 1:1:1::2 int:dp1T0");
 	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1:1:1::1/64");
+
+} DP_END_TEST;
+
+
+/*
+ * Capture what the data plane writes to its log while `fn`-style test code runs.
+ *
+ * DPDK's log stream is redirected to a temporary file and put back afterwards. The level is NOT touched: the suite runs at
+ * the data plane's default level (-d1), and "the record is visible at the default level" is part of what is asserted.
+ */
+static FILE *log_capture_start(void)
+{
+	FILE *f = tmpfile();
+
+	dp_test_fail_unless(f, "tmpfile() failed");
+	rte_openlog_stream(f);
+	return f;
+}
+
+static char *log_capture_stop(FILE *f)
+{
+	long n;
+	char *buf;
+
+	fflush(f);
+	rte_openlog_stream(NULL);
+	fseek(f, 0, SEEK_END);
+	n = ftell(f);
+	rewind(f);
+	buf = calloc(1, n + 1);
+	dp_test_fail_unless(buf, "no memory for the captured log");
+	dp_test_fail_unless(fread(buf, 1, n, f) == (size_t)n, "short read of the captured log");
+	fclose(f);
+	return buf;
+}
+
+static int count_of(const char *hay, const char *needle)
+{
+	int n = 0;
+
+	for (; (hay = strstr(hay, needle)); hay += strlen(needle))
+		n++;
+	return n;
+}
+
+/*
+ * The data plane says, in its own log, that it finished programming a route.
+ *
+ * Before this the only line on the path was the one written when the netlink message ARRIVED (RTM_NEWROUTE ..., before the
+ * route is installed), and the only lines about the outcome were failures. Nothing could tell from the log that a delivery
+ * had completed, so a reader had to poll `dpa object show route` and infer.
+ *
+ * What is asserted is the whole line, not that "something about the route was logged": class, op, vrf, table, prefix, scope,
+ * the two states and the backend, and two timestamps that parse as numbers. fal-test answers "full", so state=full and
+ * backend=fal-test come from the backend that was actually asked, and result=ok is the software lane's verdict.
+ * Exactly one line carries this prefix, and its first word is "programmed", which no delivery line starts with.
+ */
+DP_START_TEST(fal_cap, route_programmed_is_logged_once_with_its_fields)
+{
+	static const char want[] =
+		"ROUTE: programmed cls=route op=add vrf=1 table=254 prefix=10.75.0.0/24 scope=0 result=ok sw_state=full state=full backend=fal-test mono_ns=";
+	unsigned long long mono = 0, wall = 0;
+	char *log, *line, *eol;
+	FILE *cap;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+
+	cap = log_capture_start();
+	dp_test_netlink_add_route("10.75.0.0/24 nh 1.1.1.2 int:dp1T0");
+	log = log_capture_stop(cap);
+
+	line = strstr(log, want);
+	dp_test_fail_unless(line, "no completion record for 10.75.0.0/24 in:\n%s", log);
+	dp_test_fail_unless(sscanf(line + strlen(want), "%llu wall_ns=%llu", &mono, &wall) == 2 && mono > 0 && wall > 0,
+			    "timestamps missing or not numbers: %.200s", line);
+	eol = strchr(line, '\n');
+	dp_test_fail_unless(eol && !memchr(line, '\r', eol - line), "the record is not one terminated line");
+	dp_test_fail_unless(count_of(log, "prefix=10.75.0.0/24") == 1, "expected exactly one record for the prefix:\n%s", log);
+	dp_test_fail_unless(!strstr(log, "RTM_NEWROUTE"), "the delivery word must not be part of the completion record");
+
+	free(log);
+	dp_test_netlink_del_route("10.75.0.0/24 nh 1.1.1.2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+
+} DP_END_TEST;
+
+/*
+ * The two lanes are reported and neither is renamed for the other.
+ *
+ * fal-test-b implements no route entry points, so the forwarding backend answers no_support and the object's own state is
+ * no_support on sw-dataplane (this is what `dpa object show route6` prints). The software lane still inserted the route:
+ * sw_state=full, result=ok. A record that collapsed the two would have to call this route a failure or the backend a success.
+ */
+DP_START_TEST(fal_cap, route6_programmed_reports_both_lanes)
+{
+	static const char want[] =
+		"ROUTE: programmed cls=route6 op=add vrf=1 table=254 prefix=2010:75:75::/64 scope=0 result=ok sw_state=full state=no_support backend=sw-dataplane mono_ns=";
+	char *log;
+	FILE *cap;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1:1:1::1/64");
+
+	cap = log_capture_start();
+	dp_test_netlink_add_route("2010:75:75::/64 nh 1:1:1::2 int:dp1T0");
+	log = log_capture_stop(cap);
+
+	dp_test_fail_unless(strstr(log, want), "no route6 completion record in:\n%s", log);
+	dp_test_fail_unless(count_of(log, "prefix=2010:75:75::/64") == 1, "expected exactly one record:\n%s", log);
+
+	free(log);
+	dp_test_netlink_del_route("2010:75:75::/64 nh 1:1:1::2 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1:1:1::1/64");
+
+} DP_END_TEST;
+
+/*
+ * A replace of an existing prefix is a different record from the add: op=update.
+ */
+DP_START_TEST(fal_cap, route_replace_is_logged_as_update)
+{
+	char *log;
+	FILE *cap;
+
+	dp_test_nl_add_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+	dp_test_netlink_add_route("10.76.0.0/24 nh 1.1.1.2 int:dp1T0");
+
+	cap = log_capture_start();
+	dp_test_netlink_replace_route("10.76.0.0/24 nh 1.1.1.3 int:dp1T0");
+	log = log_capture_stop(cap);
+
+	dp_test_fail_unless(strstr(log, "ROUTE: programmed cls=route op=update vrf=1 table=254 prefix=10.76.0.0/24 scope=0 result=ok sw_state=full state=full backend=fal-test mono_ns="),
+			    "no op=update record for the replaced route in:\n%s", log);
+	dp_test_fail_unless(!strstr(log, "op=add vrf=1 table=254 prefix=10.76.0.0/24"), "a replace must not look like an add:\n%s", log);
+
+	free(log);
+	dp_test_netlink_del_route("10.76.0.0/24 nh 1.1.1.3 int:dp1T0");
+	dp_test_nl_del_ip_addr_and_connected("dp1T0", "1.1.1.1/24");
+
+} DP_END_TEST;
+
+static int null_reason_walker(json_writer_t *json, enum pd_obj_state subset)
+{
+	return 0;
+}
+
+/*
+ * A class with no walker and no written reason used to crash the data plane.
+ *
+ * jsonw_string() dereferences its argument and `not_enumerable` was passed through unchecked, so the first class added to
+ * dpa_classes[] without a reason would have killed the process the next time anyone ran `dpa object show`. The real table has
+ * no such class, so the table is a parameter and this one has the three kinds of row: walkable, no walker with a reason, no
+ * walker without. Reaching the assertions at all means it did not crash.
+ */
+DP_START_TEST(fal_cap, dpa_object_class_without_a_reason_does_not_crash)
+{
+	static const struct dpa_obj_class table[] = {
+		{ "walkable", null_reason_walker, NULL },
+		{ "later", NULL, "not built yet" },
+		{ "mystery", NULL, NULL },
+		{ NULL, NULL, NULL },
+	};
+	char *buf = NULL;
+	size_t sz = 0;
+	FILE *f = open_memstream(&buf, &sz);
+	json_writer_t *wr;
+	bool matched;
+
+	dp_test_fail_unless(f, "open_memstream failed");
+	wr = jsonw_new(f);
+	jsonw_start_object(wr);
+	matched = dpa_object_write_classes(wr, table, NULL);
+	jsonw_end_object(wr);
+	jsonw_destroy(&wr);
+	fclose(f);
+
+	dp_test_fail_unless(matched, "no class matched an unfiltered request");
+	dp_test_fail_unless(strstr(buf, "{\"class\":\"walkable\",\"enumerable\":true}"), "walkable class changed shape: %s", buf);
+	dp_test_fail_unless(strstr(buf, "{\"class\":\"later\",\"enumerable\":false,\"reason\":\"not built yet\"}"), "written reason lost: %s", buf);
+	dp_test_fail_unless(strstr(buf, "{\"class\":\"mystery\",\"enumerable\":false,\"reason\":\"no reason recorded\"}"), "missing reason not covered: %s", buf);
+	free(buf);
+
+	/* an unknown name still matches nothing, which is how the caller reports an error */
+	buf = NULL; sz = 0;
+	f = open_memstream(&buf, &sz);
+	wr = jsonw_new(f);
+	jsonw_start_object(wr);
+	matched = dpa_object_write_classes(wr, table, "nosuchclass");
+	jsonw_end_object(wr);
+	jsonw_destroy(&wr);
+	fclose(f);
+	dp_test_fail_unless(!matched, "an unknown class name must match nothing");
+	dp_test_fail_unless(strstr(buf, "\"classes\":[]"), "unknown class did not give an empty list: %s", buf);
+	free(buf);
 
 } DP_END_TEST;
